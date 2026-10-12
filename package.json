@@ -4,17 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Webnox OS - multi-tenant business operating system",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node --env-file=.env server.js",
     "start": "node server.js",
-    "test": "node tests/db.test.mjs"
+    "test": "node tests/static.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.2",
     "express": "^5.1.0"
-  },
-  "devDependencies": {
-    "@electric-sql/pglite": "^0.3.0"
   }
 }
