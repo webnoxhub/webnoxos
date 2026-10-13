@@ -110,10 +110,10 @@
 
 /* ---------- business sign-in (white, split) ---------- */
 .bl-body{margin:0;min-height:100dvh;background:linear-gradient(135deg,#EEF2FF 0%,#E0F2FE 100%);background-attachment:fixed;color:#0F172A;font:400 14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
-.bl-split{display:grid;grid-template-columns:55fr 45fr;min-height:100dvh}
-.bl-art{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:20px;padding:48px 64px}
+.bl-split{display:grid;grid-template-columns:55fr 45fr;min-height:calc(100dvh - 48px)}
+.bl-art{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:24px 64px 32px}
 .bl-mark{width:56px;height:35px}
-.bl-art-title{margin:0;font-size:32px;line-height:1.2;font-weight:700;max-width:440px}
+.bl-art-title{margin:0;font-size:30px;line-height:1.2;font-weight:700;max-width:440px}
 .bl-art-list{margin:0;padding:0;list-style:none;display:grid;gap:10px;color:#334155;font-size:16px}
 .bl-art-list li::before{content:"";display:inline-block;width:8px;height:8px;margin-right:12px;border-radius:50%;background:#4F46E5}
 .bl-main{display:grid;place-items:center;padding:24px}
@@ -158,13 +158,13 @@
 .bl-art>.bl-glow{position:fixed;z-index:0;border-radius:50%;filter:blur(60px);opacity:.45;pointer-events:none;will-change:transform}
 .bl-glow-1{width:380px;height:380px;top:-120px;left:-100px;background:#C7D2FE;animation:drift1 40s ease-in-out infinite}
 .bl-glow-2{width:340px;height:340px;bottom:-120px;right:-80px;background:#A5F3FC;animation:drift2 46s ease-in-out infinite}
-.bl-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px}
+.bl-brand{display:flex;align-items:center;gap:12px;margin-bottom:12px}
 .bl-badge{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:#0F172A;color:#fff;font-weight:700;font-size:16px;letter-spacing:.02em}
 .bl-brand-name{margin:0;font-size:18px;font-weight:600;line-height:1.2}
 .bl-brand-sub{margin:0;font-size:14px;color:#64748B}
 .bl-art-text{margin:0;max-width:440px;font-size:16px;line-height:1.6;color:#334155}
-.bl-demo{margin-top:24px;max-width:480px;padding:22px 24px;border:1px solid #E2E8F0;border-radius:20px;background:rgba(255,255,255,.82);box-shadow:0 10px 30px rgba(15,23,42,.06)}
-.bl-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:12px;margin-bottom:18px;font-size:14px;color:#1E293B}
+.bl-demo{margin-top:10px;max-width:460px;padding:16px 20px;border:1px solid #E2E8F0;border-radius:20px;background:rgba(255,255,255,.82);box-shadow:0 10px 30px rgba(15,23,42,.06)}
+.bl-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:12px;margin-bottom:12px;font-size:14px;color:#1E293B}
 .bl-track-bar{position:relative;height:16px;border-radius:8px;background:#F1F5F9;overflow:visible}
 .bl-track-bar .seg,.bl-track-bar .tm{position:absolute;display:block;transform-origin:left center;animation:bl-grow 9s ease-in-out infinite}
 .bl-track-bar .seg{top:0;height:16px;border-radius:4px;background:#4F46E5}
@@ -184,14 +184,14 @@
 .bl-wait[hidden],#spForm[hidden],.bl-ok[hidden],#spGo[hidden]{display:none}
 .bl-hint{margin:-6px 0 16px;font-size:12px;color:#64748B}
 .bl-ok{margin:0 0 16px;font-weight:500;color:#15803D}
-.bl-foot{position:fixed;left:0;right:0;bottom:0;padding:14px 16px;text-align:center;font-size:12px;color:#64748B;z-index:5;pointer-events:none}
+.bl-foot{position:relative;z-index:5;height:48px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;color:#64748B}
 .bl-badge.has-logo{background:transparent;width:auto;height:auto;border-radius:0}
 .bl-logo[hidden],#blInit[hidden]{display:none}
-.bl-logo{display:block;height:56px;width:auto;max-width:240px;object-fit:contain}
+.bl-logo{display:block;height:84px;width:auto;max-width:320px;object-fit:contain}
 .bl-brand.has-logo{flex-direction:column;align-items:flex-start;gap:8px}
 .bl-brand.has-logo .bl-brand-name{display:none}
 .bl-input,.bl-card input{background:#fff}
-.bl-main{padding-bottom:56px}
+.bl-main{padding-bottom:24px}
 @media (max-width:899px){
   .bl-demo,.bl-art-text{display:none}
   .bl-brand{margin:0;flex:none}
