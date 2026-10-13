@@ -395,3 +395,84 @@ revoke all on function public.promote_to_master(text) from public, anon, authent
 
 -- Done. Next: create your Master user (Authentication -> Users -> Invite user),
 -- then run:  select public.promote_to_master('webnoxhub@gmail.com');
+
+
+-- ============================================================================
+-- PART 4 — Workspace creation RPC
+-- ============================================================================
+-- Called from the server only (service-role key). The browser never calls
+-- this directly; POST /api/master/workspaces calls it with the service key.
+
+create or replace function public.master_create_workspace(
+  p_name           text,
+  p_slug           text,
+  p_short_code     text,
+  p_type           text    default 'rented',
+  p_status         text    default 'setup',
+  p_country        text    default null,
+  p_plan_cycle     text    default null,
+  p_plan_amount    numeric default null,
+  p_plan_currency  text    default 'PKR',
+  p_plan_fx        numeric default 1,
+  p_plan_start     date    default current_date,
+  p_roles          text[]  default '{}',
+  p_master_id      uuid    default null
+) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  ws_id uuid;
+begin
+  insert into public.workspaces (name, slug, short_code, type, status, country, created_by)
+  values (
+    btrim(p_name),
+    p_slug,
+    p_short_code,
+    p_type::public.workspace_type,
+    p_status::public.workspace_status,
+    p_country,
+    p_master_id
+  )
+  returning id into ws_id;
+
+  -- Subscription row (only when plan provided)
+  if p_plan_cycle is not null and p_plan_amount is not null then
+    insert into public.subscriptions (
+      workspace_id, cycle, amount_original, currency, fx_rate, amount,
+      start_date, trial_ends_on, next_due, status
+    ) values (
+      ws_id,
+      p_plan_cycle::public.billing_cycle,
+      p_plan_amount,
+      p_plan_currency,
+      p_plan_fx,
+      0,
+      p_plan_start,
+      case when p_plan_cycle in ('trial_7','trial_14')
+           then p_plan_start + (case p_plan_cycle when 'trial_7' then 7 else 14 end)::int
+           else null end,
+      case when p_plan_cycle not in ('trial_7','trial_14')
+           then p_plan_start + (case p_plan_cycle
+                                  when 'monthly'   then 30
+                                  when 'quarterly' then 90
+                                  when 'yearly'    then 365 end)::int
+           else null end,
+      case when p_plan_cycle in ('trial_7','trial_14') then 'trial' else 'active' end::public.billing_status
+    );
+  end if;
+
+  -- Optional role activations
+  if array_length(p_roles, 1) > 0 then
+    insert into public.workspace_roles (workspace_id, role_key, active)
+    select ws_id, unnest(p_roles), true
+    on conflict (workspace_id, role_key) do update set active = true;
+  end if;
+
+  -- Audit log
+  insert into public.master_access_log (workspace_id, master_id, action)
+  values (ws_id, p_master_id, 'opened');
+
+  return ws_id;
+end $$;
+
+revoke all on function public.master_create_workspace(text,text,text,text,text,text,text,numeric,text,numeric,date,text[],uuid)
+  from public, anon, authenticated;
