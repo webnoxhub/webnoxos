@@ -1,4 +1,5 @@
 import { getClient } from '/js/supabase.js';
+import { isEmail, EMAIL_MSG } from '/js/validate.js';
 
 const REFUSED = "These details don't work here.";
 const EMPTY = 'Enter your email and password.';
@@ -63,6 +64,7 @@ export async function initMasterLogin() {
     const mail = email.value.trim().toLowerCase();
     const pw = pass.value;
     if (!mail || !pw) { showError(EMPTY); return; }
+    if (!isEmail(mail)) { showError(EMAIL_MSG); email.focus(); return; } // format only, before any network call
 
     setBusy(true);
     clearError();
@@ -225,6 +227,7 @@ export async function initBusinessLogin() {
     const mail = email.value.trim().toLowerCase();
     const pw = pass.value;
     if (!mail || !pw) { showError(EMPTY); return; }
+    if (!isEmail(mail)) { showError(EMAIL_MSG); email.focus(); return; } // format only, before any network call
 
     setBusy(true); clearError(); noteEl.hidden = true;
     const started = Date.now();

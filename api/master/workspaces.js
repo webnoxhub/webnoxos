@@ -2,6 +2,7 @@
 // GET  /api/master/workspaces — list all workspaces (for the dashboard)
 import { requireMaster, send } from '../../lib/master-guard.js';
 import { createClient } from '@supabase/supabase-js';
+import { isEmail } from '../../lib/validate.js';
 
 const ALLOWED_ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager'];
 const ALLOWED_CYCLES = ['trial_7', 'trial_14', 'monthly', 'quarterly', 'yearly'];
@@ -59,8 +60,22 @@ async function handleCreate(req, guard, res) {
   if (type && !ALLOWED_TYPES.includes(type)) errs.push('invalid type');
   if (plan_cycle && !ALLOWED_CYCLES.includes(plan_cycle)) errs.push('invalid plan_cycle');
   if (plan_amount !== undefined && (isNaN(plan_amount) || plan_amount < 0)) errs.push('invalid plan_amount');
-  if (!admin_email || !/\S+@\S+\.\S+/.test(admin_email)) errs.push('valid admin_email is required');
-  if (roles.some(r => !ALLOWED_ROLES.includes(r))) errs.push('invalid role in roles array');
+  if (!isEmail(admin_email)) errs.push('valid admin_email is required');
+  if (manager_email && !isEmail(manager_email)) errs.push('manager_email is not a valid email');
+  if (manager_email && isEmail(manager_email) && isEmail(admin_email) &&
+      manager_email.trim().toLowerCase() === admin_email.trim().toLowerCase())
+    errs.push('manager_email must differ from admin_email');
+
+  // roles: [{ role, edit }]  (a bare string means use-only). Duplicates merge.
+  const roleMap = new Map();
+  if (!Array.isArray(roles)) errs.push('roles must be an array');
+  else for (const r of roles) {
+    const key = typeof r === 'string' ? r : r && r.role;
+    const edit = typeof r === 'object' && r ? r.edit === true : false;
+    if (!ALLOWED_ROLES.includes(key)) { errs.push('invalid role: ' + String(key)); continue; }
+    roleMap.set(key, roleMap.get(key) || edit);
+  }
+  const roleList = [...roleMap].map(([role, edit]) => ({ role, edit }));
   if (errs.length) return send(res, 400, { error: errs.join('; ') });
 
   const admin = adminClient();
@@ -74,11 +89,11 @@ async function handleCreate(req, guard, res) {
     p_type:          type || 'rented',
     p_status:        'setup',
     p_plan_cycle:    plan_cycle || null,
-    p_plan_amount:   plan_amount !== undefined ? Number(plan_amount) : null,
+    p_plan_amount:   plan_amount !== undefined ? Number(plan_amount) : (plan_cycle ? 0 : null),  // trials are free
     p_plan_currency: plan_currency,
     p_plan_fx:       Number(plan_fx),
     p_plan_start:    new Date().toISOString().slice(0, 10),
-    p_roles:         roles,
+    p_roles:         roleList,
     p_master_id:     guard.user.id,
   });
 
@@ -90,8 +105,8 @@ async function handleCreate(req, guard, res) {
   }
 
   const workspaceId = wsId;
-  const siteUrl = process.env.SITE_URL || process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
+  const siteUrl = (process.env.SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
+    .replace(/\/+$/, '');
 
   const invites = {};
 
@@ -121,7 +136,7 @@ async function handleCreate(req, guard, res) {
   }
 
   // ── 3. Optional manager invite ─────────────────────────────────────────────
-  if (manager_email && /\S+@\S+\.\S+/.test(manager_email)) {
+  if (manager_email) {
     const { data: mgrUser, error: mgrErr } = await admin.auth.admin.inviteUserByEmail(
       manager_email.trim().toLowerCase(),
       {

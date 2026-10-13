@@ -1,6 +1,7 @@
 import { esc, icon } from '/js/ui.js';
 import { todayISO, fmtDate } from '/js/time.js';
 import { statusInfo, TYPE_LABEL, CYCLE_LABEL } from '/js/billing.js';
+import { isEmail, EMAIL_MSG } from '/js/validate.js';
 
 const FILTERS = [
   ['all', 'All'], ['trial', 'Trial'], ['active', 'Active'], ['suspended', 'Suspended'], ['archived', 'Archived'],
@@ -133,7 +134,7 @@ function openCreateModal({ sb, onCreated }) {
     name: '', slug: '', short_code: '',
     type: 'rented',
     plan_cycle: null, plan_amount: '', plan_currency: 'PKR',
-    roles: [],
+    roles: Object.fromEntries(ROLES.map((r) => [r.id, { use: false, edit: false }])),
     admin_email: '', manager_email: '',
   };
 
@@ -176,13 +177,13 @@ function openCreateModal({ sb, onCreated }) {
 
 // ── Wizard step indicator ──────────────────────────────────────────────────────
 function renderWizSteps(el, active) {
-  const labels = ['Workspace', 'Type & Plan', 'Roles', 'Team', 'Review'];
+  const labels = ['Workspace', 'Type', 'Roles', 'Team', 'Review'];
   el.innerHTML = labels.map((l, i) =>
-    '<div class="wiz-step' + (i < active ? ' done' : i === active ? ' active' : '') + '">' +
+    '<div class="wiz-step' + (i < active ? ' is-done' : i === active ? ' is-current' : '') + '">' +
       '<span class="wiz-dot">' + (i < active ? icon('check', 12) : String(i + 1)) + '</span>' +
       '<span class="wiz-label">' + esc(l) + '</span>' +
     '</div>' +
-    (i < labels.length - 1 ? '<span class="wiz-line' + (i < active ? ' done' : '') + '"></span>' : '')
+    (i < labels.length - 1 ? '<span class="wiz-line"></span>' : '')
   ).join('');
 }
 
@@ -300,29 +301,41 @@ function renderStep1(body, foot, state, goStep) {
   });
 }
 
-// ── Step 2: Roles ──────────────────────────────────────────────────────────────
+// ── Step 2: Roles table (Allow to use / Allow to edit, on-off switches) ───────
 function renderStep2(body, foot, state, goStep) {
-  body.innerHTML =
-    '<div class="wf-group">' +
-      '<label class="wf-label">Workspace Roles</label>' +
-      '<p class="wf-hint">Select which roles this workspace will use. You can change this later.</p>' +
-      '<div class="role-toggles">' +
-        ROLES.map((r) =>
-          '<button class="role-toggle' + (state.roles.includes(r.id) ? ' is-checked' : '') + '" type="button" data-r="' + r.id + '">' +
-          esc(r.label) + '</button>'
-        ).join('') +
-      '</div>' +
-    '</div>';
+  const sw = (role, kind, on) =>
+    '<button class="switch' + (on ? ' is-on' : '') + '" type="button" role="switch" aria-checked="' + on + '"' +
+    ' data-r="' + role.id + '" data-k="' + kind + '" aria-label="' + esc(role.label) + ' — ' + (kind === 'use' ? 'allow to use' : 'allow to edit') + '">' +
+    '<span class="switch-knob"></span></button>';
 
-  body.querySelectorAll('.role-toggle').forEach((b) => b.addEventListener('click', () => {
-    const r = b.dataset.r;
-    if (state.roles.includes(r)) {
-      state.roles = state.roles.filter((x) => x !== r);
-      b.classList.remove('is-checked');
-    } else {
-      state.roles = [...state.roles, r];
-      b.classList.add('is-checked');
-    }
+  body.innerHTML =
+    '<p class="wf-hint" style="margin:0 0 12px">Applies to this workspace only. Only roles switched on will be available inside it.</p>' +
+    '<div class="table-wrap"><table class="rtable"><thead><tr>' +
+      '<th>Role</th><th>Allow to use</th><th>Allow to edit</th>' +
+    '</tr></thead><tbody>' +
+      ROLES.map((r) =>
+        '<tr data-row="' + r.id + '"><td class="rt-name">' + esc(r.label) + '</td>' +
+        '<td>' + sw(r, 'use', state.roles[r.id].use) + '</td>' +
+        '<td>' + sw(r, 'edit', state.roles[r.id].edit) + '</td></tr>'
+      ).join('') +
+    '</tbody></table></div>';
+
+  function paintRow(id) {
+    const st = state.roles[id];
+    body.querySelectorAll('.switch[data-r="' + id + '"]').forEach((b) => {
+      const on = st[b.dataset.k];
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+  }
+
+  body.querySelectorAll('.switch').forEach((b) => b.addEventListener('click', () => {
+    const st = state.roles[b.dataset.r];
+    const k = b.dataset.k;
+    st[k] = !st[k];
+    if (k === 'edit' && st.edit) st.use = true;   // editing needs use
+    if (k === 'use' && !st.use) st.edit = false;  // no use, no edit
+    paintRow(b.dataset.r);
   }));
 
   foot.innerHTML =
@@ -346,6 +359,16 @@ function renderStep3(body, foot, state, goStep) {
       '<input class="wf-input" id="mgrEmail" type="email" placeholder="manager@client.com" value="' + esc(state.manager_email) + '">' +
     '</div>';
 
+  // Validate as soon as the person leaves the field
+  body.querySelector('#adminEmail').addEventListener('blur', (e) => {
+    const v = e.target.value.trim();
+    if (v && !isEmail(v)) shakeField(e.target, EMAIL_MSG, false);
+  });
+  body.querySelector('#mgrEmail').addEventListener('blur', (e) => {
+    const v = e.target.value.trim();
+    if (v && !isEmail(v)) shakeField(e.target, EMAIL_MSG, false);
+  });
+
   foot.innerHTML =
     '<button class="btn btn-ghost" id="step3Back" type="button">Back</button>' +
     '<button class="btn" id="step3Next" type="button">Review →</button>';
@@ -354,8 +377,9 @@ function renderStep3(body, foot, state, goStep) {
   foot.querySelector('#step3Next').addEventListener('click', () => {
     const ae = body.querySelector('#adminEmail').value.trim().toLowerCase();
     const me = body.querySelector('#mgrEmail').value.trim().toLowerCase();
-    if (!ae || !/\S+@\S+\.\S+/.test(ae)) return shakeField(body.querySelector('#adminEmail'), 'Valid admin email is required.');
-    if (me && !/\S+@\S+\.\S+/.test(me)) return shakeField(body.querySelector('#mgrEmail'), 'Enter a valid email or leave blank.');
+    if (!isEmail(ae)) return shakeField(body.querySelector('#adminEmail'), ae ? EMAIL_MSG : 'Admin email is required.');
+    if (me && !isEmail(me)) return shakeField(body.querySelector('#mgrEmail'), EMAIL_MSG);
+    if (me && me === ae) return shakeField(body.querySelector('#mgrEmail'), 'Manager email must differ from the admin email.');
     state.admin_email = ae;
     state.manager_email = me;
     goStep(4);
@@ -376,7 +400,7 @@ function renderStep4(body, foot, state, goStep, sb, closeModal, onCreated) {
       row('Code', state.short_code) +
       row('Type', typeLabel) +
       row('Plan', planLabel + (paidAmt ? ' — ' + paidAmt : '')) +
-      (state.roles.length ? row('Roles', state.roles.map((r) => ROLES.find((x) => x.id === r)?.label || r).join(', ')) : '') +
+      row('Roles', rolesSummary(state.roles)) +
       row('Admin', state.admin_email) +
       (state.manager_email ? row('Manager', state.manager_email) : '') +
     '</div>' +
@@ -405,7 +429,7 @@ function renderStep4(body, foot, state, goStep, sb, closeModal, onCreated) {
         short_code:  state.short_code,
         type:        state.type,
         admin_email: state.admin_email,
-        roles:       state.roles,
+        roles:       ROLES.filter((r) => state.roles[r.id].use).map((r) => ({ role: r.id, edit: state.roles[r.id].edit })),
       };
       if (state.plan_cycle)    payload.plan_cycle    = state.plan_cycle;
       if (state.plan_amount)   payload.plan_amount   = Number(state.plan_amount);
@@ -467,7 +491,7 @@ function showResultModal(json, state, onCreated) {
         (adminUrl
           ? '<div class="wf-group">' +
               '<label class="wf-label">Admin Invite Link</label>' +
-              '<div class="result-copy">' +
+              '<div class="copy-row">' +
                 '<input class="wf-input" readonly value="' + esc(adminUrl) + '" id="adminInviteInput">' +
                 '<button class="btn btn-sm" type="button" id="copyAdmin">Copy</button>' +
                 '<a class="btn btn-sm btn-wa" href="' + waLink('Admin invite for ' + esc(ws.name || state.name) + ': ' + adminUrl) + '" target="_blank" rel="noopener">WhatsApp</a>' +
@@ -477,7 +501,7 @@ function showResultModal(json, state, onCreated) {
         (mgrUrl
           ? '<div class="wf-group">' +
               '<label class="wf-label">Manager Invite Link</label>' +
-              '<div class="result-copy">' +
+              '<div class="copy-row">' +
                 '<input class="wf-input" readonly value="' + esc(mgrUrl) + '" id="mgrInviteInput">' +
                 '<button class="btn btn-sm" type="button" id="copyMgr">Copy</button>' +
                 '<a class="btn btn-sm btn-wa" href="' + waLink('Manager invite for ' + esc(ws.name || state.name) + ': ' + mgrUrl) + '" target="_blank" rel="noopener">WhatsApp</a>' +
@@ -513,6 +537,12 @@ function codeify(v) {
   return v.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4);
 }
 
+function rolesSummary(map) {
+  const on = ROLES.filter((r) => map[r.id].use);
+  if (!on.length) return 'None';
+  return on.map((r) => r.label + (map[r.id].edit ? ' (use + edit)' : ' (use)')).join(', ');
+}
+
 function isPaidPlan(cycle) {
   return cycle === 'monthly' || cycle === 'quarterly' || cycle === 'yearly';
 }
@@ -521,8 +551,8 @@ function row(label, value) {
   return '<div class="result-row"><span class="result-label">' + esc(label) + '</span><span class="result-value">' + esc(value) + '</span></div>';
 }
 
-function shakeField(el, msg) {
-  el.focus();
+function shakeField(el, msg, focus = true) {
+  if (focus) el.focus();
   el.classList.add('is-invalid');
   let hint = el.parentElement.querySelector('.wf-err');
   if (!hint) { hint = document.createElement('p'); hint.className = 'wf-err'; el.parentElement.appendChild(hint); }

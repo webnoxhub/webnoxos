@@ -320,6 +320,27 @@ button{font:inherit;color:inherit}
 .result-label{min-width:80px;color:var(--muted);font-size:12px;padding-top:1px}
 .result-value{flex:1;font-size:13px;color:var(--ink);word-break:break-all}
 
-/* Copy row */
-.result-copy{display:flex;gap:8px;align-items:center}
-.result-copy .wf-input{flex:1;font-size:12px}
+
+/* ── Roles table + on/off switches ─────────────────────────────── */
+.rtable{width:100%;border-collapse:collapse}
+.rtable th{padding:8px 10px;text-align:center;font-size:.72rem;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line);white-space:nowrap}
+.rtable th:first-child,.rtable td.rt-name{text-align:left}
+.rtable td{padding:10px;text-align:center;border-bottom:1px solid var(--line);vertical-align:middle}
+.rtable tr:last-child td{border-bottom:0}
+.rt-name{font-size:.85rem;font-weight:500;color:var(--ink)}
+.switch{
+  position:relative;width:42px;height:24px;padding:0;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:var(--muted-bg);transition:background .15s,border-color .15s;
+}
+.switch-knob{
+  position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .15s;
+}
+.switch.is-on{background:var(--accent);border-color:var(--accent)}
+.switch.is-on .switch-knob{transform:translateX(18px)}
+.switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){.switch,.switch-knob{transition:none}}
+
+/* Invite link row (result modal) */
+.copy-row{display:flex;gap:8px;align-items:center}
+.copy-row .wf-input{flex:1;font-size:12px}

@@ -403,6 +403,13 @@ revoke all on function public.promote_to_master(text) from public, anon, authent
 -- Called from the server only (service-role key). The browser never calls
 -- this directly; POST /api/master/workspaces calls it with the service key.
 
+-- Roles carry two switches: active = "allow to use", can_edit = "allow to edit".
+alter table public.workspace_roles add column if not exists can_edit boolean not null default false;
+
+-- p_roles changed from text[] to jsonb ([{"role":"sales_rep","edit":true}, ...]),
+-- so the old signature is dropped first. Safe to run more than once.
+drop function if exists public.master_create_workspace(text,text,text,text,text,text,text,numeric,text,numeric,date,text[],uuid);
+
 create or replace function public.master_create_workspace(
   p_name           text,
   p_slug           text,
@@ -415,7 +422,7 @@ create or replace function public.master_create_workspace(
   p_plan_currency  text    default 'PKR',
   p_plan_fx        numeric default 1,
   p_plan_start     date    default current_date,
-  p_roles          text[]  default '{}',
+  p_roles          jsonb   default '[]'::jsonb,
   p_master_id      uuid    default null
 ) returns uuid
 language plpgsql security definer set search_path = public as $$
@@ -460,11 +467,13 @@ begin
     );
   end if;
 
-  -- Optional role activations
-  if array_length(p_roles, 1) > 0 then
-    insert into public.workspace_roles (workspace_id, role_key, active)
-    select ws_id, unnest(p_roles), true
-    on conflict (workspace_id, role_key) do update set active = true;
+  -- Role switches: each entry = allowed to use (row exists, active) + allowed to edit
+  if jsonb_typeof(p_roles) = 'array' and jsonb_array_length(p_roles) > 0 then
+    insert into public.workspace_roles (workspace_id, role_key, active, can_edit)
+    select ws_id, r->>'role', true, coalesce((r->>'edit')::boolean, false)
+    from jsonb_array_elements(p_roles) r
+    on conflict (workspace_id, role_key)
+      do update set active = true, can_edit = excluded.can_edit;
   end if;
 
   -- Audit log
@@ -474,5 +483,5 @@ begin
   return ws_id;
 end $$;
 
-revoke all on function public.master_create_workspace(text,text,text,text,text,text,text,numeric,text,numeric,date,text[],uuid)
+revoke all on function public.master_create_workspace(text,text,text,text,text,text,text,numeric,text,numeric,date,jsonb,uuid)
   from public, anon, authenticated;

@@ -108,5 +108,16 @@ await throws('access log cannot be updated', `update master_access_log set actio
 await throws('access log cannot be deleted', `delete from master_access_log`, 'append-only');
 await throws('negative rent refused', `insert into subscriptions(workspace_id,cycle,amount_original,currency,fx_rate,amount,start_date) values ('${wsB.id}','monthly',-1,'USD',1,0,'2026-10-13')`);
 
+// 7. master_create_workspace: role switches (use / edit)
+const created = (await db.query(`select public.master_create_workspace(
+  'Switch Co','switch-co','SWC','rented','setup',null,'trial_7',0,'PKR',1,current_date,
+  '[{"role":"sales_rep","edit":true},{"role":"finance","edit":false}]'::jsonb, '${m1}') as id`)).rows[0].id;
+const rr = (await db.query(`select role_key, active, can_edit from workspace_roles where workspace_id='${created}' order by role_key`)).rows;
+ok('create RPC stores only the roles switched on', rr.length === 2 && rr.every(r => r.active));
+ok('create RPC stores allow-to-edit per role', rr.find(r => r.role_key === 'sales_rep').can_edit === true && rr.find(r => r.role_key === 'finance').can_edit === false);
+ok('create RPC makes a trial subscription row', (await db.query(`select 1 from subscriptions where workspace_id='${created}'`)).rows.length === 1);
+await throws('create RPC refuses an unknown role', `select public.master_create_workspace('Bad Co','bad-co','BAD','rented','setup',null,null,null,'PKR',1,current_date,'[{"role":"ceo","edit":true}]'::jsonb,'${m1}')`);
+await asThrows('browser cannot call master_create_workspace', mem, `select master_create_workspace('X','x-co','XX')`, 'permission denied');
+
 console.log(failed ? `\n${failed} FAILED` : '\nAll database checks passed');
 process.exit(failed ? 1 : 0);
