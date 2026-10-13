@@ -1,9 +1,18 @@
 import { esc, icon, toast } from '/js/ui.js';
 import { isEmail, EMAIL_MSG } from '/js/validate.js';
 import { openModal, api, fieldError, linkRow, bindCopy } from '/js/modal.js';
+import { bindCombo } from '/js/combo.js';
 
-const ROLE_LABEL = { sales_rep: 'Sales Rep', lead_gen: 'Lead Gen', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager' };
+const ROLE_LABEL = { sales_rep: 'Sales Representative', lead_gen: 'Lead Generation', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager' };
 const TYPE_LABEL = { admin: 'Admin', manager: 'Manager', member: 'Member' };
+const ROLE_COLOR = { sales_rep: '#2563eb', lead_gen: '#0891b2', cold_caller: '#ea580c', finance: '#16a34a', project_manager: '#d97706' };
+const ROLE_DESC = {
+  sales_rep: 'Client conversations, proposals and closing deals',
+  lead_gen: 'Finding and qualifying new prospects',
+  cold_caller: 'Calling prospects and booking meetings',
+  finance: 'Invoices, payments and financial records',
+  project_manager: 'Running delivery for the clients assigned to them',
+};
 const DEPARTMENTS = ['Sales', 'Marketing', 'Design', 'Development', 'Finance', 'Operations', 'Support'];
 const DESIGNATIONS = ['Sales Representative', 'Lead Generation Executive', 'Cold Caller', 'Accountant', 'Project Manager', 'Designer', 'Developer', 'Team Lead'];
 
@@ -87,7 +96,11 @@ function openMemberModal({ sb, d, person, onDone }) {
   const isSelf = editing && person.id === d.me.id;
   const canType = d.me.account_type === 'admin' && !isSelf && (!editing || person.account_type !== 'admin');
   const sel = new Set(person ? person.roles || [] : []);
-  const opt = (arr) => arr.map((x) => '<option value="' + esc(x) + '">').join('');
+  let accType = person ? person.account_type : 'member';
+  const cards = [
+    ...(canType ? [{ key: 'manager', label: 'Manager', color: '#8b5cf6', desc: 'Coordinating the team and keeping work on track', on: accType === 'manager' }] : []),
+    ...d.roles.map((r) => ({ key: r, label: ROLE_LABEL[r], color: ROLE_COLOR[r] || '#64748b', desc: ROLE_DESC[r] || '', on: sel.has(r) })),
+  ];
 
   const m = openModal({
     title: editing ? (person.name || 'Team member') : 'Add team member', wide: true,
@@ -102,15 +115,16 @@ function openMemberModal({ sb, d, person, onDone }) {
       '<div class="wf-group"><label class="wf-label" for="tJoin">Joining date</label>' +
         '<input class="wf-input" id="tJoin" type="date" value="' + esc(person ? person.joining_date || '' : '') + '"></div></div>' +
       '<div class="wf-row"><div class="wf-group"><label class="wf-label" for="tDept">Department</label>' +
-        '<input class="wf-input" id="tDept" list="dl-dept" maxlength="60" value="' + esc(person ? person.department || '' : '') + '"><datalist id="dl-dept">' + opt(DEPARTMENTS) + '</datalist></div>' +
+        '<div class="combo"><input class="wf-input" id="tDept" autocomplete="off" maxlength="60" placeholder="Select or type" value="' + esc(person ? person.department || '' : '') + '"><span class="combo-chev"></span></div></div>' +
       '<div class="wf-group"><label class="wf-label" for="tDesig">Designation</label>' +
-        '<input class="wf-input" id="tDesig" list="dl-desig" maxlength="60" value="' + esc(person ? person.job_title || '' : '') + '"><datalist id="dl-desig">' + opt(DESIGNATIONS) + '</datalist></div></div>' +
-      (canType ? '<div class="wf-group"><label class="wf-label" for="tType">Access level</label><select class="wf-select" id="tType">' +
-        '<option value="member"' + (person && person.account_type === 'member' || !person ? ' selected' : '') + '>Member</option>' +
-        '<option value="manager"' + (person && person.account_type === 'manager' ? ' selected' : '') + '>Manager</option></select></div>' : '') +
+        '<div class="combo"><input class="wf-input" id="tDesig" autocomplete="off" maxlength="60" placeholder="Select or type" value="' + esc(person ? person.job_title || '' : '') + '"><span class="combo-chev"></span></div></div></div>' +
       '<div class="wf-group"><label class="wf-label">Roles</label>' +
-        (d.roles.length ? '<div class="role-toggles">' + d.roles.map((r) =>
-          '<button class="role-toggle' + (sel.has(r) ? ' is-checked' : '') + '" type="button" data-r="' + r + '">' + esc(ROLE_LABEL[r]) + '</button>').join('') + '</div>'
+        '<p class="wf-hint role-intro">Optional. Leave empty for designers, developers, editors and other project agents. They get My tasks, the timer and the projects they are added to. Each role adds its own tab.' +
+        (canType ? ' Manager gives full access like the admin (except Settings and Permissions).' : '') + '</p>' +
+        (cards.length ? '<div class="role-cards">' + cards.map((c) =>
+          '<button class="role-card' + (c.on ? ' is-checked' : '') + '" type="button" data-r="' + c.key + '" role="checkbox" aria-checked="' + c.on + '">' +
+            '<span class="rc-box"></span><span class="rc-text"><span class="rc-name"><i class="rc-dot" style="background:' + c.color + '"></i>' + esc(c.label) + '</span>' +
+            '<span class="rc-desc">' + esc(c.desc) + '</span></span></button>').join('') + '</div>'
           : '<p class="wf-hint">No extra roles are switched on for this workspace.</p>') + '</div>' +
       (editing ? '<div id="tLinkBox"></div>' : '') +
       '<p class="wf-err" id="tErr" hidden></p>',
@@ -124,15 +138,18 @@ function openMemberModal({ sb, d, person, onDone }) {
 
   const $ = (id) => m.overlay.querySelector('#' + id);
   const err = $('tErr'), showErr = (t) => { err.textContent = t; err.hidden = !t; };
-  m.body.querySelectorAll('.role-toggle').forEach((b) => b.addEventListener('click', () => {
-    const r = b.dataset.r; sel.has(r) ? sel.delete(r) : sel.add(r); b.classList.toggle('is-checked', sel.has(r));
+  m.body.querySelectorAll('.role-card').forEach((b) => b.addEventListener('click', () => {
+    const r = b.dataset.r, on = !b.classList.contains('is-checked');
+    if (r === 'manager') accType = on ? 'manager' : 'member'; else on ? sel.add(r) : sel.delete(r);
+    b.classList.toggle('is-checked', on); b.setAttribute('aria-checked', on);
   }));
+  bindCombo($('tDept'), DEPARTMENTS); bindCombo($('tDesig'), DESIGNATIONS);
   if ($('tCancel')) $('tCancel').addEventListener('click', m.close);
 
   const payload = () => ({
     name: $('tName').value.trim(), phone: $('tPhone').value.trim(), joining_date: $('tJoin').value,
     department: $('tDept').value.trim(), designation: $('tDesig').value.trim(), roles: [...sel],
-    ...($('tType') ? { account_type: $('tType').value } : {}),
+    ...(canType ? { account_type: accType } : {}),
   });
 
   $('tSave').addEventListener('click', async (e) => {

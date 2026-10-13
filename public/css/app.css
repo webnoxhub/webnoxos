@@ -366,3 +366,41 @@ button{font:inherit;color:inherit}
 a.btn,.btn-wa{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
 .wf-input[readonly]{opacity:.7}
 .copy-row .wf-input[readonly]{opacity:1}
+
+/* Select popups: readable in light and dark themes */
+.wf-select{ color-scheme:light dark; }
+.wf-select option{ background:var(--canvas,#fff); color:var(--ink,#111); }
+body[data-world="master"] .wf-select{ color-scheme:dark; }
+body[data-world="master"] .wf-select option{ background:#0f2744; color:#fff; }
+
+/* Combo (styled suggestions) */
+.combo{ position:relative; }
+.combo .wf-input{ padding-right:34px; }
+.combo-chev{ position:absolute;right:13px;top:50%;width:7px;height:7px;margin-top:-6px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(45deg);pointer-events:none; }
+.combo-list{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;max-height:210px;overflow:auto;
+  background:var(--canvas,#fff);border:1px solid var(--line);border-radius:10px;padding:4px;
+  box-shadow:0 12px 32px rgba(15,23,42,.16);
+}
+.combo-list[hidden]{ display:none; }
+.combo-item{ display:block;width:100%;text-align:left;padding:8px 10px;border:0;border-radius:7px;background:none;color:var(--ink);font:inherit;font-size:.85rem;cursor:pointer; }
+.combo-item:hover,.combo-item.is-on{ background:var(--accent-bg); }
+
+/* Role cards */
+.role-intro{ margin:0 0 10px;line-height:1.5; }
+.role-cards{ display:grid;grid-template-columns:1fr 1fr;gap:10px; }
+@media(max-width:560px){ .role-cards{ grid-template-columns:1fr; } }
+.role-card{
+  display:flex;align-items:flex-start;gap:10px;text-align:left;padding:12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--canvas,#fff);color:var(--ink);
+  font:inherit;cursor:pointer;transition:border-color .15s,background .15s;
+}
+.role-card:hover{ border-color:var(--accent); }
+.role-card.is-checked{ border-color:var(--accent);background:var(--accent-bg); }
+.rc-box{ flex:none;width:18px;height:18px;margin-top:1px;border:1.5px solid var(--line);border-radius:5px;background:var(--canvas,#fff);position:relative; }
+.role-card.is-checked .rc-box{ background:var(--accent);border-color:var(--accent); }
+.role-card.is-checked .rc-box::after{ content:'';position:absolute;left:5px;top:1px;width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg); }
+.rc-text{ display:flex;flex-direction:column;gap:3px;min-width:0; }
+.rc-name{ display:flex;align-items:center;gap:7px;font-size:.85rem;font-weight:600; }
+.rc-dot{ width:8px;height:8px;border-radius:50%;flex:none; }
+.rc-desc{ font-size:.75rem;color:var(--muted);line-height:1.4; }
