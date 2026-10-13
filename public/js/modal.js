@@ -60,3 +60,26 @@ export function bindCopy(root) {
     b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500);
   }));
 }
+
+// "Type the name to confirm" popup for permanent deletes. onConfirm(typedName) must throw to show an error.
+export function confirmByName({ title, warning, name, label = 'Delete permanently', onConfirm }) {
+  const m = openModal({
+    title,
+    body: '<p class="danger-note">' + warning + '</p>' +
+      '<div class="wf-group"><label class="wf-label" for="cnName">Type <strong>' + esc(name) + '</strong> to confirm</label>' +
+      '<input class="wf-input" id="cnName" autocomplete="off" spellcheck="false"></div><p class="wf-err" id="cnErr" hidden></p>',
+    foot: '<button class="btn btn-ghost" id="cnCancel" type="button">Cancel</button><button class="btn btn-danger" id="cnGo" type="button" disabled>' + esc(label) + '</button>',
+  });
+  const $ = (i) => m.overlay.querySelector('#' + i);
+  const same = () => $('cnName').value.trim().toLowerCase() === String(name).trim().toLowerCase();
+  $('cnName').addEventListener('input', () => { $('cnGo').disabled = !same(); });
+  $('cnCancel').addEventListener('click', m.close);
+  $('cnGo').addEventListener('click', async (e) => {
+    if (!same()) return;
+    e.target.disabled = true; $('cnErr').hidden = true;
+    try { await onConfirm($('cnName').value.trim()); m.close(); }
+    catch (x) { $('cnErr').textContent = x.message; $('cnErr').hidden = false; e.target.disabled = false; }
+  });
+  setTimeout(() => $('cnName').focus(), 0);
+  return m;
+}

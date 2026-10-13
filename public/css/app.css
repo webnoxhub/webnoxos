@@ -443,3 +443,9 @@ body[data-world="master"] .wf-select option{ background:#0f2744; color:#fff; }
 .act-list{ list-style:none;margin:0;padding:0; }
 .act-row{ display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-top:1px solid var(--line);font-size:.88rem; } .act-row:first-child{ border-top:0; }
 @media(max-width:560px){ .act-row{ flex-direction:column;gap:2px; } }
+
+/* Danger actions */
+.btn-danger{ background:var(--err-bg,#fee2e2);color:var(--err,#dc2626);border:1px solid transparent; }
+.btn-danger:hover:not(:disabled){ background:var(--err,#dc2626);color:#fff; }
+.btn-danger:disabled{ opacity:.45;cursor:not-allowed; }
+.danger-note{ margin:0 0 14px;padding:10px 12px;border-radius:8px;background:var(--err-bg,#fee2e2);color:var(--err,#b91c1c);font-size:.84rem;line-height:1.5; }

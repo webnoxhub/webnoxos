@@ -1,6 +1,6 @@
 import { esc, icon, toast } from '/js/ui.js';
 import { isEmail, EMAIL_MSG } from '/js/validate.js';
-import { openModal, api, fieldError, linkRow, bindCopy } from '/js/modal.js';
+import { openModal, api, fieldError, linkRow, bindCopy, confirmByName } from '/js/modal.js';
 import { bindCombo } from '/js/combo.js';
 import { DEPARTMENTS, DESIGNATIONS } from '/js/lists.js';
 
@@ -101,6 +101,7 @@ function openMemberModal({ sb, d, person, onDone }) {
   const isSelf = editing && person.id === d.me.id;
   const canType = d.me.account_type === 'admin' && !isSelf && (!editing || person.account_type !== 'admin');
   const sel = new Set(person ? person.roles || [] : []);
+  const canDelete = editing && d.me.account_type === 'admin' && !isSelf && person.account_type !== 'admin';
   let accType = person ? person.account_type : 'member';
   const cards = [
     ...(canType ? [{ key: 'manager', label: 'Manager', color: '#8b5cf6', desc: 'Coordinating the team and keeping work on track', on: accType === 'manager' }] : []),
@@ -140,6 +141,7 @@ function openMemberModal({ sb, d, person, onDone }) {
       ? '<span class="foot-left">' +
           '<button class="btn btn-sm btn-ghost" id="tRegen" type="button">Regenerate link</button>' +
           (!isSelf ? '<button class="btn btn-sm btn-ghost" id="tToggle" type="button">' + (person.status === 'active' ? 'Deactivate' : 'Activate') + '</button>' : '') +
+          (canDelete ? '<button class="btn btn-sm btn-danger" id="tDelete" type="button">Delete</button>' : '') +
         '</span><button class="btn" id="tSave" type="button">Save changes</button>'
       : '<button class="btn btn-ghost" id="tCancel" type="button">Cancel</button><button class="btn" id="tSave" type="button">Add and get link</button>',
   });
@@ -230,6 +232,15 @@ function openMemberModal({ sb, d, person, onDone }) {
       } catch (x) { showErr(x.message); }
       e.target.disabled = false;
     });
+    if ($('tDelete')) $('tDelete').addEventListener('click', () => confirmByName({
+      title: 'Delete ' + (person.name || 'this person') + ' permanently',
+      name: person.name || person.email,
+      warning: 'This removes <strong>' + esc(person.name || person.email) + '</strong> from the whole system: their sign-in, their comments and requests, their place in projects, and every line about them in the activity log. This cannot be undone.',
+      onConfirm: async (typed) => {
+        await api(sb, '/api/team/members?id=' + encodeURIComponent(person.id) + '&action=delete', { method: 'POST', body: JSON.stringify({ confirm: typed }) });
+        m.close(); toast('Deleted'); onDone();
+      },
+    }));
     if ($('tToggle')) $('tToggle').addEventListener('click', async (e) => {
       const next = person.status === 'active' ? 'inactive' : 'active';
       if (next === 'inactive' && !confirm('Deactivate ' + (person.name || 'this person') + '? They will not be able to sign in.')) return;

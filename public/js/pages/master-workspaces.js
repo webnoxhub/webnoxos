@@ -2,6 +2,7 @@ import { esc, icon } from '/js/ui.js';
 import { todayISO, fmtDate } from '/js/time.js';
 import { statusInfo, TYPE_LABEL, CYCLE_LABEL } from '/js/billing.js';
 import { isEmail, EMAIL_MSG } from '/js/validate.js';
+import { confirmByName } from '/js/modal.js';
 
 const FILTERS = [
   ['all', 'All'], ['trial', 'Trial'], ['active', 'Active'], ['suspended', 'Suspended'], ['archived', 'Archived'],
@@ -616,9 +617,27 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
     b.disabled = false; b.textContent = 'Regenerate link';
   }));
 
-  foot.innerHTML = '<button class="btn btn-ghost" id="panelCancel" type="button">Close</button>' +
+  const onHold = ws.status === 'suspended';
+  foot.innerHTML = '<span class="foot-left"><button class="btn btn-sm btn-ghost" id="panelHold" type="button">' + (onHold ? 'Resume workspace' : 'Put on hold') + '</button>' +
+    '<button class="btn btn-sm btn-danger" id="panelDelete" type="button">Delete</button></span>' +
+    '<button class="btn btn-ghost" id="panelCancel" type="button">Close</button>' +
     '<button class="btn" id="panelSave" type="button">Save changes</button>';
   foot.querySelector('#panelCancel').addEventListener('click', close);
+  foot.querySelector('#panelHold').addEventListener('click', async (e) => {
+    e.target.disabled = true; showErr('');
+    try {
+      await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ status: onHold ? 'active' : 'suspended' }) });
+      close(); onChanged();
+    } catch (x) { showErr(x.message); e.target.disabled = false; }
+  });
+  foot.querySelector('#panelDelete').addEventListener('click', () => confirmByName({
+    title: 'Delete ' + ws.name + ' permanently', name: ws.name,
+    warning: 'This erases <strong>' + esc(ws.name) + '</strong> and everything in it: all people and their sign-ins, projects, requests, notifications, activity, plan and payment records. This cannot be undone.',
+    onConfirm: async (typed) => {
+      await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id), { method: 'DELETE', body: JSON.stringify({ confirm: typed }) });
+      close(); onChanged();
+    },
+  }));
   foot.querySelector('#panelSave').addEventListener('click', async (e) => {
     const name = body.querySelector('#pName').value.trim();
     if (!name) return shakeField(body.querySelector('#pName'), 'Business name is required.');

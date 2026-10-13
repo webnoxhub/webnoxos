@@ -10,8 +10,8 @@ import { canManage, canAssignType, checkMember } from '../../lib/team-rules.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export default async function handler(req, res) {
-  const g = await requireTeamManager(req);
+export const makeHandler = (guard) => async function handler(req, res) {
+  const g = await guard(req);
   if (!g.ok) return send(res, g.status, { error: g.error });
   const { admin, me, workspace } = g;
 
@@ -33,8 +33,10 @@ export default async function handler(req, res) {
 
   if (req.method === 'PATCH') return edit(admin, me, target, activeRoles, req, res);
   if (req.method === 'POST' && url.searchParams.get('action') === 'link') return regenerate(admin, workspace, target, req, res);
+  if (req.method === 'POST' && url.searchParams.get('action') === 'delete') return remove(admin, me, target, req, res);
   send(res, 405, { error: 'Method not allowed' });
-}
+};
+export default makeHandler(requireTeamManager);
 
 async function list(admin, ws, me, activeRoles, res) {
   const { data, error } = await admin.from('profiles')
@@ -116,4 +118,17 @@ async function validBoss(admin, wsId, bossId, selfId) {
   if (bossId === selfId) return false;
   const { data } = await admin.from('profiles').select('id,account_type,status').eq('id', bossId).eq('workspace_id', wsId).maybeSingle();
   return !!data && data.status === 'active' && ['admin', 'manager'].includes(data.account_type);
+}
+
+// Permanent delete: Admin only, never himself, never another admin. Name must be typed to confirm.
+async function remove(admin, me, target, req, res) {
+  let body = {}; try { body = await readJson(req); } catch { /* empty is fine */ }
+  if (me.account_type !== 'admin' || target.id === me.id || target.account_type === 'admin') return send(res, 403, { error: 'You cannot delete this person' });
+  const want = String(target.name || target.email || '').trim().toLowerCase();
+  if (!want || String(body.confirm || '').trim().toLowerCase() !== want) return send(res, 400, { error: 'The name you typed does not match' });
+  const r1 = await admin.rpc('purge_person_activity', { p_id: target.id });
+  if (r1.error) return send(res, 502, { error: r1.error.message });
+  const r2 = await admin.auth.admin.deleteUser(target.id);
+  if (r2.error) return send(res, 502, { error: r2.error.message });
+  send(res, 200, { ok: true });
 }

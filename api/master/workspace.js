@@ -9,8 +9,8 @@ const ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manag
 const STATUSES = ['setup', 'trial', 'active', 'suspended', 'archived'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export default async function handler(req, res) {
-  const guard = await requireMaster(req);
+export const makeHandler = (masterGuard) => async function handler(req, res) {
+  const guard = await masterGuard(req);
   if (!guard.ok) return send(res, guard.status, { error: guard.error });
   const admin = guard.admin;
 
@@ -25,9 +25,11 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET')   return details(admin, ws, res);
   if (req.method === 'PATCH') return update(admin, ws, req, res);
+  if (req.method === 'DELETE') return purge(admin, ws, req, res);
   if (req.method === 'POST' && url.searchParams.get('action') === 'link') return regenerate(admin, ws, req, res);
   send(res, 405, { error: 'Method not allowed' });
-}
+};
+export default makeHandler(requireMaster);
 
 async function details(admin, ws, res) {
   const [roles, subs, people] = await Promise.all([
@@ -106,4 +108,15 @@ async function regenerate(admin, ws, req, res) {
     emailed = !error;
   }
   send(res, 200, { link: r.link, emailed, expires: 'about 1 hour' });
+}
+
+// Permanent delete of a whole workspace and everything inside it. The Master types the business name to confirm.
+async function purge(admin, ws, req, res) {
+  let body = {}; try { body = await readJson(req); } catch { /* empty is fine */ }
+  if (String(body.confirm || '').trim().toLowerCase() !== String(ws.name).trim().toLowerCase()) return send(res, 400, { error: 'The name you typed does not match' });
+  const { data: ids, error } = await admin.rpc('purge_workspace', { p_id: ws.id });
+  if (error) return send(res, 502, { error: error.message });
+  let failed = 0;
+  for (const id of ids || []) { const r = await admin.auth.admin.deleteUser(id); if (r.error) failed++; }
+  send(res, 200, { ok: true, accounts_left: failed });
 }

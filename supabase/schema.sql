@@ -712,3 +712,76 @@ alter table public.project_members        enable row level security;
 alter table public.request_comments       enable row level security;
 alter table public.activity_log           enable row level security;
 alter table public.notifications          enable row level security;
+
+
+-- ============================================================================
+-- PART 8 — Delete a person / a workspace completely
+-- ============================================================================
+-- Run this whole part once in the Supabase SQL Editor.
+-- Used only by the server (service key). The browser can never call these functions.
+
+-- Every activity line remembers who it is about, so a deleted person leaves no trace in the log.
+alter table public.activity_log add column if not exists involved uuid[] not null default '{}';
+
+-- A deleted person takes their comments and their requests with them.
+alter table public.request_comments drop constraint if exists request_comments_author_id_fkey;
+alter table public.request_comments add constraint request_comments_author_id_fkey
+  foreign key (author_id) references public.profiles(id) on delete cascade;
+alter table public.staffing_requests drop constraint if exists staffing_requests_requested_by_fkey;
+alter table public.staffing_requests add constraint staffing_requests_requested_by_fkey
+  foreign key (requested_by) references public.profiles(id) on delete cascade;
+
+-- The Master audit log stays append-only, except while a workspace is being deleted completely.
+create or replace function public.access_log_immutable() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and coalesce(current_setting('webnox.purge', true), '') = 'on' then return old; end if;
+  raise exception 'master_access_log is append-only';
+end $$;
+
+create or replace function public.one_admin_guard() returns trigger
+language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and coalesce(current_setting('webnox.purge', true), '') = 'on' then return old; end if;
+  if old.account_type = 'admin' and old.status = 'active' and old.workspace_id is not null
+     and (tg_op = 'DELETE'
+          or new.status <> 'active' or new.account_type <> 'admin'
+          or new.workspace_id is distinct from old.workspace_id) then
+    if not exists (select 1 from public.profiles p
+                   where p.workspace_id = old.workspace_id and p.account_type = 'admin'
+                     and p.status = 'active' and p.id <> old.id) then
+      raise exception 'Cannot remove the last active admin of a workspace';
+    end if;
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end $$;
+
+-- Removes every activity line that was done by, or is about, one person.
+create or replace function public.purge_person_activity(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  delete from public.activity_log where actor_id = p_id or p_id = any(involved);
+$$;
+revoke all on function public.purge_person_activity(uuid) from public, anon, authenticated;
+
+-- Deletes a workspace and everything inside it. Returns the ids of the people removed,
+-- so the server can delete their sign-in accounts too.
+create or replace function public.purge_workspace(p_id uuid) returns uuid[]
+language plpgsql security definer set search_path = public as $$
+declare ids uuid[];
+begin
+  perform set_config('webnox.purge', 'on', true);
+  select coalesce(array_agg(id), '{}') into ids from public.profiles where workspace_id = p_id and is_master = false;
+  delete from public.notifications        where workspace_id = p_id;
+  delete from public.activity_log         where workspace_id = p_id;
+  delete from public.staffing_requests    where workspace_id = p_id;
+  delete from public.projects             where workspace_id = p_id;
+  delete from public.workspace_roles      where workspace_id = p_id;
+  delete from public.subscription_payments where workspace_id = p_id;
+  delete from public.subscriptions        where workspace_id = p_id;
+  delete from public.billing_log          where workspace_id = p_id;
+  delete from public.master_access_log    where workspace_id = p_id;
+  delete from public.profiles             where workspace_id = p_id and is_master = false;
+  delete from public.workspaces           where id = p_id;
+  return ids;
+end $$;
+revoke all on function public.purge_workspace(uuid) from public, anon, authenticated;

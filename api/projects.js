@@ -100,7 +100,7 @@ async function create({ admin, me, workspace, res }, body) {
   await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.projectCreated(me.name, p.name) });
   if (v.manager_id) {
     const mn = await nameOf(admin, v.manager_id);
-    await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.managerAssigned(me.name, mn, p.name), to: [v.manager_id] });
+    await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.managerAssigned(me.name, mn, p.name), to: [v.manager_id], about: [v.manager_id] });
   }
   send(res, 201, { id: p.id });
 }
@@ -123,7 +123,7 @@ async function update(ctx, id, body) {
   if (error) return send(res, 502, { error: error.message });
   if (v.manager_id !== undefined && v.manager_id !== p.manager_id && v.manager_id) {
     const mn = await nameOf(admin, v.manager_id);
-    await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.managerAssigned(me.name, mn, v.name || p.name), to: [v.manager_id] });
+    await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.managerAssigned(me.name, mn, v.name || p.name), to: [v.manager_id], about: [v.manager_id] });
   }
   send(res, 200, { ok: true });
 }
@@ -219,7 +219,7 @@ async function decide(ctx, id, body) {
   const text = fn(me.name, label, p.name);
   const others = (await approvers(admin, workspace.id));
   await record(admin, workspace.id, {
-    actorId: me.id, projectId: p.id, requestId: r.id, text,
+    actorId: me.id, projectId: p.id, requestId: r.id, text, about: [r.requested_by],
     to: [r.requested_by, ...others], toText: { [r.requested_by]: fn(me.name, label, p.name, 'your') },
   });
   send(res, 200, { ok: true, status: patch.status });
@@ -238,7 +238,7 @@ async function comment(ctx, id, body) {
   if (error) return send(res, 502, { error: error.message });
   const to = [r.requested_by, ...(await approvers(admin, workspace.id))];
   await record(admin, workspace.id, {
-    actorId: me.id, projectId: p.id, requestId: r.id, text: say.commented(me.name, label, p.name), to,
+    actorId: me.id, projectId: p.id, requestId: r.id, text: say.commented(me.name, label, p.name), to, about: [r.requested_by],
     toText: { [r.requested_by]: say.commented(me.name, label, p.name, 'your') },
   });
   send(res, 201, { ok: true });
@@ -262,7 +262,7 @@ async function addMember(ctx, id, body) {
   if (!person || !agentFits(person, item)) return send(res, 400, { error: 'This person does not match the approved requirement' });
   const { error } = await admin.from('project_members').insert({ project_id: p.id, user_id: person.id, item_id: item.id, added_by: me.id });
   if (error) return send(res, 400, { error: /duplicate|already/i.test(error.message) ? 'Already in this project' : error.message });
-  await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.memberAdded(me.name, person.name, p.name), to: [person.id, ...(await approvers(admin, workspace.id))] });
+  await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.memberAdded(me.name, person.name, p.name), about: [person.id], to: [person.id, ...(await approvers(admin, workspace.id))] });
   send(res, 201, { ok: true });
 }
 
@@ -276,6 +276,6 @@ async function removeMember(ctx, id, body) {
   const { data: gone } = await admin.from('project_members').delete().eq('project_id', p.id).eq('user_id', userId).select('user_id');
   if (!gone || !gone.length) return send(res, 404, { error: 'Not in this project' });
   const mn = await nameOf(admin, userId);
-  await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.memberRemoved(me.name, mn, p.name), to: [userId] });
+  await record(admin, workspace.id, { actorId: me.id, projectId: p.id, text: say.memberRemoved(me.name, mn, p.name), to: [userId], about: [userId] });
   send(res, 200, { ok: true });
 }

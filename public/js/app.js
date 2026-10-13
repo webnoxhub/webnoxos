@@ -59,7 +59,7 @@ function fail(msg) {
 async function memberWorld(sb, prof) {
   if (!prof.workspace_id) return leave(sb, 'noprofile');
   const { data: ws } = await sb.from('workspaces').select('name,status').eq('id', prof.workspace_id).maybeSingle();
-  if (!ws || ws.status === 'archived') return leave(sb, 'closed');
+  if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   document.getElementById('boot').remove();
   const pill = { admin: 'Admin', manager: 'Manager' }[prof.account_type] || 'Member';
