@@ -9,16 +9,3 @@ export function applyBrand(name) {
     bd.textContent = ((w.length > 1 ? w[0][0] + w[1][0] : n.slice(0, 2)) || '').toUpperCase();
   }
 }
-
-// Use /logo.png when it exists; otherwise the initials stay.
-(function () {
-  const img = document.getElementById('blLogo');
-  if (!img) return;
-  const t = new Image();
-  t.onload = () => {
-    img.hidden = false;
-    const i = document.getElementById('blInit'); if (i) i.hidden = true;
-    const bd = document.getElementById('blBadge'); if (bd) bd.classList.add('has-logo');
-  };
-  t.src = '/logo.png';
-})();
