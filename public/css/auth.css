@@ -113,7 +113,7 @@
 .bl-split{display:grid;grid-template-columns:55fr 45fr;min-height:calc(100dvh - 48px)}
 .bl-art{position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:24px 64px 32px}
 .bl-mark{width:56px;height:35px}
-.bl-art-title{margin:0;font-size:30px;line-height:1.2;font-weight:700;max-width:440px}
+.bl-art-title{margin:0;font:800 36px/1.15 'Plus Jakarta Sans',Inter,system-ui,sans-serif;letter-spacing:-.025em;max-width:460px;background:linear-gradient(90deg,#4338CA 0%,#0EA5E9 100%);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
 .bl-art-list{margin:0;padding:0;list-style:none;display:grid;gap:10px;color:#334155;font-size:16px}
 .bl-art-list li::before{content:"";display:inline-block;width:8px;height:8px;margin-right:12px;border-radius:50%;background:#4F46E5}
 .bl-main{display:grid;place-items:center;padding:24px}
@@ -147,7 +147,7 @@
   .bl-split{grid-template-columns:1fr;grid-template-rows:auto 1fr}
   .bl-art{flex-direction:row;align-items:center;min-height:96px;padding:16px 20px;gap:14px}
   .bl-mark{width:40px;height:25px;flex:none}
-  .bl-art-title{font-size:16px;max-width:none}
+  .bl-art-title{font-size:16px;max-width:none;-webkit-text-fill-color:#0F172A;color:#0F172A;background:none}
   .bl-art-list{display:none}
   .bl-main{padding:24px 20px;align-items:start}
 }
@@ -162,7 +162,7 @@
 .bl-badge{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:#0F172A;color:#fff;font-weight:700;font-size:16px;letter-spacing:.02em}
 .bl-brand-name{margin:0;font-size:18px;font-weight:600;line-height:1.2}
 .bl-brand-sub{margin:0;font-size:14px;color:#64748B}
-.bl-art-text{margin:0;max-width:440px;font-size:16px;line-height:1.6;color:#334155}
+.bl-art-text{margin:0;max-width:420px;font:500 16px/1.6 'Plus Jakarta Sans',Inter,system-ui,sans-serif;color:#475569}
 .bl-demo{margin-top:10px;max-width:460px;padding:16px 20px;border:1px solid #E2E8F0;border-radius:20px;background:rgba(255,255,255,.82);box-shadow:0 10px 30px rgba(15,23,42,.06)}
 .bl-row{display:grid;grid-template-columns:84px 1fr;align-items:center;gap:12px;margin-bottom:12px;font-size:14px;color:#1E293B}
 .bl-track-bar{position:relative;height:16px;border-radius:8px;background:#F1F5F9;overflow:visible}
@@ -187,9 +187,9 @@
 .bl-foot{position:relative;z-index:5;height:48px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;color:#64748B}
 .bl-badge.has-logo{background:transparent;width:auto;height:auto;border-radius:0}
 .bl-logo[hidden],#blInit[hidden]{display:none}
-.bl-logo{display:block;height:84px;width:auto;max-width:320px;object-fit:contain}
+.bl-logo{display:block;height:120px;width:auto;max-width:420px;object-fit:contain}
 .bl-brand.has-logo{flex-direction:column;align-items:flex-start;gap:8px}
-.bl-brand.has-logo .bl-brand-name{display:none}
+.bl-brand.has-logo .bl-brand-name,.bl-brand.has-logo .bl-brand-sub{display:none}
 .bl-input,.bl-card input{background:#fff}
 .bl-main{padding-bottom:24px}
 @media (max-width:899px){
