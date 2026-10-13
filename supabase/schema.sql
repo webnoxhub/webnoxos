@@ -485,3 +485,55 @@ end $$;
 
 revoke all on function public.master_create_workspace(text,text,text,text,text,text,text,numeric,text,numeric,date,jsonb,uuid)
   from public, anon, authenticated;
+
+
+-- ============================================================================
+-- PART 5 — Team inside a workspace
+-- ============================================================================
+-- Admin and Manager add and manage their own people through /api/team/*
+-- (server, service key). The browser never writes to profiles.
+
+alter table public.profiles add column if not exists phone        text;
+alter table public.profiles add column if not exists joining_date date;
+alter table public.profiles add column if not exists roles        text[] not null default '{}';
+
+-- A person can only hold roles this workspace has switched on.
+create or replace function public.profile_roles_guard() returns trigger
+language plpgsql as $$
+declare r text;
+begin
+  if new.roles is not null and array_length(new.roles, 1) > 0 then
+    if new.workspace_id is null then raise exception 'Roles need a workspace'; end if;
+    foreach r in array new.roles loop
+      if not exists (select 1 from public.workspace_roles w
+                     where w.workspace_id = new.workspace_id and w.role_key = r and w.active) then
+        raise exception 'Role % is not activated in this workspace', r;
+      end if;
+    end loop;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists profiles_roles_guard on public.profiles;
+create trigger profiles_roles_guard before insert or update of roles, workspace_id on public.profiles
+  for each row execute function public.profile_roles_guard();
+
+-- Full profile rows (email, phone) are visible only to Admin and Manager of the same workspace.
+-- Everyone else uses team_directory() below.
+drop policy if exists profiles_workspace_read on public.profiles;
+create policy profiles_workspace_read on public.profiles for select
+  using ( workspace_id is not null and workspace_id = public.current_workspace() and public.is_manager() );
+
+-- Safe directory for every member of a workspace: no email, no phone.
+create or replace function public.team_directory()
+returns table (id uuid, name text, job_title text, department text, account_type text,
+               status text, roles text[], last_seen_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.name, p.job_title, p.department, p.account_type, p.status, p.roles, p.last_seen_at
+  from public.profiles p
+  where p.workspace_id is not null
+    and p.workspace_id = public.current_workspace()
+    and p.is_master = false
+$$;
+revoke all on function public.team_directory() from public, anon;
+grant execute on function public.team_directory() to authenticated;

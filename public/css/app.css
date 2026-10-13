@@ -354,3 +354,15 @@ button{font:inherit;color:inherit}
 .team-main strong{display:block;font-size:.85rem}
 .team-link{flex-basis:100%;margin-top:6px}
 .wtable td .btn-sm{height:30px}
+
+/* ── Team + member shell ───────────────────────────────────────── */
+.foot-left{display:flex;gap:8px;flex-wrap:wrap}
+.home-card{padding:24px;max-width:640px}
+.home-hi{margin:0 0 6px;font-size:1.25rem}
+.home-roles{margin:12px 0}
+.wtable td .chip + .chip{margin-left:4px}
+.wf-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:480px){.wf-row{grid-template-columns:1fr}}
+a.btn,.btn-wa{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
+.wf-input[readonly]{opacity:.7}
+.copy-row .wf-input[readonly]{opacity:1}

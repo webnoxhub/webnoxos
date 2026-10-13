@@ -75,7 +75,17 @@ await throws('last active admin cannot be demoted', `update profiles set account
 // 5. RLS isolation (as signed-in users)
 ok('member sees own workspace only', (await as(mem, `select id from workspaces`)).length === 1);
 ok('member sees nobody outside their workspace', (await as(mem, `select id from profiles`)).every(r => true) && (await as(mem, `select id from profiles where workspace_id='${wsB.id}'`)).length === 0);
-ok('member sees the two people of workspace A', (await as(mem, `select id from profiles`)).length === 2);
+ok('plain member cannot read profile rows of colleagues (no emails)', (await as(mem, `select id from profiles`)).length === 1);
+ok('team_directory shows the two people of workspace A to a member', (await as(mem, `select id from team_directory()`)).length === 2);
+ok('team_directory has no email or phone column', !(await as(mem, `select * from team_directory()`)).some(r => 'email' in r || 'phone' in r));
+ok('Admin of A reads the two profiles of A', (await as(a1, `select id from profiles`)).length === 2);
+ok('team_directory of B never contains A', (await as(a2, `select id from team_directory()`)).length === 1);
+ok('Master gets nothing from team_directory', (await as(m1, `select id from team_directory()`)).length === 0);
+await throws('role not activated in the workspace is refused', `update profiles set roles='{finance}' where id='${mem}'`, 'not activated');
+await db.query(`insert into workspace_roles(workspace_id,role_key,active) values ('${wsA.id}','finance',true)`);
+await db.query(`update profiles set roles='{finance}', phone='0300', joining_date='2026-10-13' where id='${mem}'`);
+ok('an activated role can be held', (await db.query(`select roles from profiles where id='${mem}'`)).rows[0].roles[0] === 'finance');
+await throws('unknown role key is refused', `update profiles set roles='{ceo}' where id='${mem}'`, 'not activated');
 ok('Master reads every workspace', (await as(m1, `select id from workspaces`)).length === 2);
 ok('Master reads his own profile (login check)', (await as(m1, `select is_master from profiles where id='${m1}'`))[0]?.is_master === true);
 ok('Master cannot read member profiles directly', (await as(m1, `select id from profiles where id='${mem}'`)).length === 0);

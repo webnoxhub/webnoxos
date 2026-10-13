@@ -11,6 +11,14 @@ const NAV = [
   { path: '/master/settings', label: 'Settings', icon: 'cog' },
 ];
 
+const MEMBER_NAV = [
+  { path: '/home', label: 'Home', icon: 'home', page: () => import('/js/pages/home.js') },
+  { path: '/team', label: 'Team', icon: 'users', page: () => import('/js/pages/team.js') },
+  { path: '/tasks', label: 'Tasks', icon: 'check' },
+  { path: '/leads', label: 'Leads', icon: 'pulse' },
+  { path: '/finance', label: 'Finance', icon: 'wallet' },
+];
+
 boot();
 
 async function boot() {
@@ -52,12 +60,8 @@ async function memberWorld(sb, prof) {
   if (!ws || ws.status === 'archived') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   document.getElementById('boot').remove();
-  document.getElementById('app').innerHTML =
-    '<main class="solo"><section class="card solo-card">' +
-    '<h1>' + esc(ws.name) + '</h1>' +
-    '<p class="muted">You are signed in as ' + esc(prof.name || prof.email) + '. Your workspace is being prepared.</p>' +
-    '<button class="btn" id="out" type="button">Sign out</button></section></main>';
-  document.getElementById('out').addEventListener('click', () => signOut(sb));
+  const pill = { admin: 'Admin', manager: 'Manager' }[prof.account_type] || 'Member';
+  mountShell(sb, prof, { nav: MEMBER_NAV, home: '/home', brand: ws.name, pill, suffix: ws.name, ws });
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +71,12 @@ async function masterWorld(sb, prof) {
   await loadCss('/css/master.css');
   document.body.dataset.world = 'master';
   document.getElementById('boot').remove();
+  mountShell(sb, prof, { nav: NAV, home: '/master', brand: 'Webnox OS', pill: 'Master', suffix: 'Webnox OS' });
+}
 
+// The shared shell: sidebar, top bar, avatar menu and the hash router.
+function mountShell(sb, prof, cfg) {
+  const NAV_ = cfg.nav;
   const initials = ((prof.name || prof.email || '?').trim().slice(0, 2)).toUpperCase();
   document.getElementById('app').innerHTML =
     '<div class="shell" id="shell">' +
@@ -77,9 +86,9 @@ async function masterWorld(sb, prof) {
           '<stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs>' +
           '<path d="M8 4l2.2 5.8L16 12l-5.8 2.2L8 20l-2.2-5.8L0 12l5.8-2.2z" fill="#22D3EE"/>' +
           '<path d="M26 6h9l-9 28h-9zM42 6h9l-9 28h-9z" fill="url(#g1)"/></svg>' +
-          '<div class="sb-title"><p class="sb-brand">Webnox OS</p><span class="pill">Master</span></div>' +
+          '<div class="sb-title"><p class="sb-brand">' + esc(cfg.brand) + '</p><span class="pill">' + esc(cfg.pill) + '</span></div>' +
         '</div>' +
-        '<nav class="sb-nav" id="nav">' + NAV.map((n) => n.page
+        '<nav class="sb-nav" id="nav">' + NAV_.map((n) => n.page
           ? '<a class="nav-item" href="#' + n.path + '" data-path="' + n.path + '">' + icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span></a>'
           : '<span class="nav-item is-soon" aria-disabled="true">' + icon(n.icon) + '<span class="nav-label">' + esc(n.label) +
             '</span><span class="soon">Soon</span></span>').join('') + '</nav>' +
@@ -105,7 +114,7 @@ async function masterWorld(sb, prof) {
 
   const shell = document.getElementById('shell');
   const view = document.getElementById('view');
-  const setTitle = (t) => { document.getElementById('pageTitle').textContent = t; document.title = t + ' · Webnox OS'; };
+  const setTitle = (t) => { document.getElementById('pageTitle').textContent = t; document.title = t + ' · ' + cfg.suffix; };
 
   // Sidebar: collapsed preference (desktop) and overlay (mobile)
   try { if (localStorage.getItem('wx_sb') === '1') shell.classList.add('is-collapsed'); } catch { /* ignore */ }
@@ -130,11 +139,11 @@ async function masterWorld(sb, prof) {
 
   // Router
   async function route() {
-    const path = (location.hash.slice(1) || '/master').split('?')[0];
-    const item = NAV.find((n) => n.page && n.path === path);
+    const path = (location.hash.slice(1) || cfg.home).split('?')[0];
+    const item = NAV_.find((n) => n.page && n.path === path);
     if (!item) {
       if (location.hash) toast('That page is not available.');
-      location.replace('#/master');
+      location.replace('#' + cfg.home);
       return;
     }
     document.querySelectorAll('.nav-item[data-path]').forEach((a) =>
@@ -142,7 +151,7 @@ async function masterWorld(sb, prof) {
     closeNav();
     try {
       const mod = await item.page();
-      await mod.default({ el: view, sb, profile: prof, setTitle });
+      await mod.default({ el: view, sb, profile: prof, setTitle, workspace: cfg.ws });
     } catch {
       view.innerHTML = '<div class="empty"><p>This page could not be loaded.</p></div>';
     }

@@ -186,6 +186,15 @@ export async function initBusinessLogin() {
   const forgot = document.getElementById('blForgot');
   const forgotText = document.getElementById('blForgotText');
 
+  // ?w=<slug> shows the business name. The server answers {} for anything that is not a live workspace.
+  const wslug = (new URLSearchParams(location.search).get('w') || '').toLowerCase();
+  if (/^[a-z0-9-]{1,40}$/.test(wslug)) {
+    fetch('/api/public/workspace-brand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: wslug }) })
+      .then((r) => r.json()).then((b) => {
+        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = 'Sign in to ' + b.name; document.title = 'Sign in · ' + b.name; }
+      }).catch(() => { /* plain sign-in page */ });
+  }
+
   const code = new URLSearchParams(location.search).get('m');
   if (code && MESSAGES[code]) { noteEl.textContent = MESSAGES[code]; noteEl.hidden = false; }
 
