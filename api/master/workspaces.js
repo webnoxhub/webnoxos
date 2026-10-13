@@ -3,6 +3,7 @@
 import { requireMaster, send } from '../../lib/master-guard.js';
 import { createClient } from '@supabase/supabase-js';
 import { isEmail } from '../../lib/validate.js';
+import { makeLink } from '../../lib/invites.js';
 
 const ALLOWED_ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager'];
 const ALLOWED_CYCLES = ['trial_7', 'trial_14', 'monthly', 'quarterly', 'yearly'];
@@ -81,6 +82,13 @@ async function handleCreate(req, guard, res) {
   const admin = adminClient();
   if (!admin) return send(res, 500, { error: 'Server not configured' });
 
+  // An email that already has an account cannot be invited again.
+  for (const [who, mail] of [['Admin', admin_email], ['Manager', manager_email]]) {
+    if (!mail) continue;
+    const { data: ex } = await admin.from('profiles').select('id').eq('email', mail.trim().toLowerCase()).maybeSingle();
+    if (ex) return send(res, 409, { error: `${who} email already has an account. Use a different email.` });
+  }
+
   // ── 1. Create workspace via RPC ──────────────────────────────────────────
   const { data: wsId, error: rpcErr } = await admin.rpc('master_create_workspace', {
     p_name:          name.trim(),
@@ -105,58 +113,16 @@ async function handleCreate(req, guard, res) {
   }
 
   const workspaceId = wsId;
-  const siteUrl = (process.env.SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'))
-    .replace(/\/+$/, '');
-
   const invites = {};
 
-  // ── 2. Create admin auth user + send invite ───────────────────────────────
-  const { data: adminUser, error: adminErr } = await admin.auth.admin.inviteUserByEmail(
-    admin_email.trim().toLowerCase(),
-    {
-      redirectTo: `${siteUrl}/set-password.html`,
-      data: { workspace_id: workspaceId, account_type: 'admin', workspace_slug: slug },
-    }
-  );
-  if (adminErr) {
-    // Non-fatal: workspace was created. Log and continue.
-    invites.admin = { email: admin_email, error: adminErr.message };
-  } else {
-    // Set workspace_id and account_type on the profile
-    await admin.from('profiles').update({
-      workspace_id: workspaceId,
-      account_type: 'admin',
-    }).eq('id', adminUser.user.id);
-
-    invites.admin = {
-      email: admin_email,
-      userId: adminUser.user.id,
-      inviteUrl: `${siteUrl}/set-password.html`,
-    };
-  }
-
-  // ── 3. Optional manager invite ─────────────────────────────────────────────
-  if (manager_email) {
-    const { data: mgrUser, error: mgrErr } = await admin.auth.admin.inviteUserByEmail(
-      manager_email.trim().toLowerCase(),
-      {
-        redirectTo: `${siteUrl}/set-password.html`,
-        data: { workspace_id: workspaceId, account_type: 'manager', workspace_slug: slug },
-      }
-    );
-    if (mgrErr) {
-      invites.manager = { email: manager_email, error: mgrErr.message };
-    } else {
-      await admin.from('profiles').update({
-        workspace_id: workspaceId,
-        account_type: 'manager',
-      }).eq('id', mgrUser.user.id);
-      invites.manager = {
-        email: manager_email,
-        userId: mgrUser.user.id,
-        inviteUrl: `${siteUrl}/set-password.html`,
-      };
-    }
+  // ── 2/3. Create the admin (and optional manager) + a real set-password link ──
+  for (const [key, mail, type] of [['admin', admin_email, 'admin'], ['manager', manager_email, 'manager']]) {
+    if (!mail) continue;
+    const email = mail.trim().toLowerCase();
+    const r = await makeLink(admin, email, { workspace_id: workspaceId, account_type: type, workspace_slug: slug });
+    if (r.error) { invites[key] = { email, error: r.error }; continue; }
+    await admin.from('profiles').update({ workspace_id: workspaceId, account_type: type }).eq('id', r.user.id);
+    invites[key] = { email, userId: r.user.id, link: r.link };
   }
 
   // ── 4. Fetch the created workspace row ─────────────────────────────────────

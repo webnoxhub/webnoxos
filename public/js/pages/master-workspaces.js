@@ -7,6 +7,9 @@ const FILTERS = [
   ['all', 'All'], ['trial', 'Trial'], ['active', 'Active'], ['suspended', 'Suspended'], ['archived', 'Archived'],
 ];
 
+const STATUS_LABEL = { setup: 'Setup', trial: 'Trial', active: 'Active', suspended: 'Suspended', archived: 'Archived' };
+const STATUS_TONE  = { setup: 'muted', trial: 'accent', active: 'ok', suspended: 'err', archived: 'muted' };
+
 const ROLES = [
   { id: 'sales_rep',       label: 'Sales Rep' },
   { id: 'lead_gen',        label: 'Lead Gen' },
@@ -35,7 +38,10 @@ export default async function render({ el, sb, setTitle }) {
     return;
   }
 
-  renderList(el, data, () => openCreateModal({ el, sb, onCreated: () => render({ el, sb, setTitle }) }));
+  const reload = () => render({ el, sb, setTitle });
+  renderList(el, data,
+    () => openCreateModal({ el, sb, onCreated: reload }),
+    (id) => openWorkspacePanel({ sb, id, onChanged: reload }));
 }
 
 // ── Load workspaces + member counts ───────────────────────────────────────────
@@ -60,7 +66,7 @@ async function loadWorkspaces(sb) {
 }
 
 // ── Render workspace list ──────────────────────────────────────────────────────
-function renderList(el, { list }, onNew) {
+function renderList(el, { list }, onNew, onOpen) {
   if (!list.length) {
     el.innerHTML =
       '<div class="page-head"><h2 class="page-title">Workspaces</h2>' +
@@ -87,7 +93,7 @@ function renderList(el, { list }, onNew) {
         '<input id="q" type="search" placeholder="Search workspaces" aria-label="Search workspaces" autocomplete="off"></label>' +
     '</div>' +
     '<div class="table-wrap"><table class="wtable"><thead><tr>' +
-      '<th>Workspace</th><th>Type</th><th>Members</th><th>Plan</th><th>Next due</th><th>Days left</th><th>Status</th>' +
+      '<th>Workspace</th><th>Type</th><th>Members</th><th>Plan</th><th>Next due</th><th>Days left</th><th>Status</th><th></th>' +
     '</tr></thead><tbody id="rows"></tbody></table></div>' +
     '<div class="empty" id="none" hidden><p>No workspaces match.</p></div>';
 
@@ -109,9 +115,12 @@ function renderList(el, { list }, onNew) {
             '<span class="muted small">' + esc(sub.currency) + ' ' + esc(Number(sub.amount_original).toLocaleString('en-US')) + '</span>' : '—') + '</td>' +
         '<td data-l="Next due">' + esc(sub ? fmtDate(sub.next_due || sub.trial_ends_on) : '—') + '</td>' +
         '<td data-l="Days left" class="c-days' + (info.days !== null && info.days < 0 ? ' neg' : '') + '">' + esc(days) + '</td>' +
-        '<td data-l="Status"><span class="chip chip-' + info.tone + '">' + esc(info.label) + '</span></td>' +
+        '<td data-l="Status"><span class="chip chip-' + (STATUS_TONE[w.status] || 'muted') + '">' + esc(STATUS_LABEL[w.status] || w.status) + '</span>' +
+          (w.type === 'rented' && info.label !== (STATUS_LABEL[w.status] || '') ? '<span class="muted small">' + esc(info.label) + '</span>' : '') + '</td>' +
+        '<td data-l=""><button class="btn btn-sm btn-ghost" type="button" data-open="' + esc(w.id) + '">Open</button></td>' +
       '</tr>';
     }).join('');
+    rows.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => onOpen(b.dataset.open)));
     none.hidden = shown.length > 0;
     el.querySelector('.table-wrap').hidden = shown.length === 0;
   }
@@ -203,8 +212,8 @@ function renderStep0(body, foot, state, goStep) {
     '</div>' +
     '<div class="wf-group">' +
       '<label class="wf-label" for="wsCode">Short Code <span class="req">*</span></label>' +
-      '<input class="wf-input" id="wsCode" type="text" placeholder="ACM" maxlength="6" value="' + esc(state.short_code) + '" style="text-transform:uppercase">' +
-      '<p class="wf-hint">2–6 uppercase letters/numbers. Auto-filled from name.</p>' +
+      '<input class="wf-input" id="wsCode" type="text" placeholder="ACM" maxlength="4" value="' + esc(state.short_code) + '" style="text-transform:uppercase">' +
+      '<p class="wf-hint">2–4 letters (A–Z). Auto-filled from name.</p>' +
     '</div>';
 
   const nameEl = body.querySelector('#wsName');
@@ -230,7 +239,7 @@ function renderStep0(body, foot, state, goStep) {
     const code = codeEl.value.trim().toUpperCase();
     if (!name) return shakeField(nameEl, 'Business name is required.');
     if (!slug || !/^[a-z0-9-]+$/.test(slug)) return shakeField(slugEl, 'Slug must be lowercase letters, numbers and hyphens.');
-    if (!code || !/^[A-Z0-9]{2,6}$/.test(code)) return shakeField(codeEl, 'Short code must be 2–6 uppercase letters.');
+    if (!code || !/^[A-Z]{2,4}$/.test(code)) return shakeField(codeEl, 'Short code must be 2–4 letters (A–Z).');
     state.name = name; state.slug = slug; state.short_code = code;
     goStep(1);
   });
@@ -303,40 +312,8 @@ function renderStep1(body, foot, state, goStep) {
 
 // ── Step 2: Roles table (Allow to use / Allow to edit, on-off switches) ───────
 function renderStep2(body, foot, state, goStep) {
-  const sw = (role, kind, on) =>
-    '<button class="switch' + (on ? ' is-on' : '') + '" type="button" role="switch" aria-checked="' + on + '"' +
-    ' data-r="' + role.id + '" data-k="' + kind + '" aria-label="' + esc(role.label) + ' — ' + (kind === 'use' ? 'allow to use' : 'allow to edit') + '">' +
-    '<span class="switch-knob"></span></button>';
-
-  body.innerHTML =
-    '<p class="wf-hint" style="margin:0 0 12px">Applies to this workspace only. Only roles switched on will be available inside it.</p>' +
-    '<div class="table-wrap"><table class="rtable"><thead><tr>' +
-      '<th>Role</th><th>Allow to use</th><th>Allow to edit</th>' +
-    '</tr></thead><tbody>' +
-      ROLES.map((r) =>
-        '<tr data-row="' + r.id + '"><td class="rt-name">' + esc(r.label) + '</td>' +
-        '<td>' + sw(r, 'use', state.roles[r.id].use) + '</td>' +
-        '<td>' + sw(r, 'edit', state.roles[r.id].edit) + '</td></tr>'
-      ).join('') +
-    '</tbody></table></div>';
-
-  function paintRow(id) {
-    const st = state.roles[id];
-    body.querySelectorAll('.switch[data-r="' + id + '"]').forEach((b) => {
-      const on = st[b.dataset.k];
-      b.classList.toggle('is-on', on);
-      b.setAttribute('aria-checked', String(on));
-    });
-  }
-
-  body.querySelectorAll('.switch').forEach((b) => b.addEventListener('click', () => {
-    const st = state.roles[b.dataset.r];
-    const k = b.dataset.k;
-    st[k] = !st[k];
-    if (k === 'edit' && st.edit) st.use = true;   // editing needs use
-    if (k === 'use' && !st.use) st.edit = false;  // no use, no edit
-    paintRow(b.dataset.r);
-  }));
+  body.innerHTML = rolesTableHTML(state.roles);
+  bindRolesTable(body, state.roles);
 
   foot.innerHTML =
     '<button class="btn btn-ghost" id="step2Back" type="button">Back</button>' +
@@ -344,6 +321,40 @@ function renderStep2(body, foot, state, goStep) {
 
   foot.querySelector('#step2Back').addEventListener('click', () => goStep(1));
   foot.querySelector('#step2Next').addEventListener('click', () => goStep(3));
+}
+
+function rolesTableHTML(map) {
+  const sw = (role, kind, on) =>
+    '<button class="switch' + (on ? ' is-on' : '') + '" type="button" role="switch" aria-checked="' + on + '"' +
+    ' data-r="' + role.id + '" data-k="' + kind + '" aria-label="' + esc(role.label) + ' — ' + (kind === 'use' ? 'allow to use' : 'allow to edit') + '">' +
+    '<span class="switch-knob"></span></button>';
+  return '<p class="wf-hint" style="margin:0 0 12px">Applies to this workspace only. Only roles switched on will be available inside it.</p>' +
+    '<div class="table-wrap"><table class="rtable"><thead><tr>' +
+      '<th>Role</th><th>Allow to use</th><th>Allow to edit</th>' +
+    '</tr></thead><tbody>' +
+      ROLES.map((r) =>
+        '<tr><td class="rt-name">' + esc(r.label) + '</td>' +
+        '<td>' + sw(r, 'use', map[r.id].use) + '</td>' +
+        '<td>' + sw(r, 'edit', map[r.id].edit) + '</td></tr>'
+      ).join('') +
+    '</tbody></table></div>';
+}
+
+function bindRolesTable(root, map) {
+  function paintRow(id) {
+    root.querySelectorAll('.switch[data-r="' + id + '"]').forEach((b) => {
+      const on = map[id][b.dataset.k];
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+  }
+  root.querySelectorAll('.switch').forEach((b) => b.addEventListener('click', () => {
+    const st = map[b.dataset.r], k = b.dataset.k;
+    st[k] = !st[k];
+    if (k === 'edit' && st.edit) st.use = true;   // editing needs use
+    if (k === 'use' && !st.use) st.edit = false;  // no use, no edit
+    paintRow(b.dataset.r);
+  }));
 }
 
 // ── Step 3: Team emails ────────────────────────────────────────────────────────
@@ -464,66 +475,161 @@ function renderStep4(body, foot, state, goStep, sb, closeModal, onCreated) {
 }
 
 // ── Result modal ──────────────────────────────────────────────────────────────
+function linkRow(label, link, text) {
+  return '<div class="wf-group"><label class="wf-label">' + esc(label) + '</label>' +
+    '<div class="copy-row"><input class="wf-input" readonly value="' + esc(link) + '">' +
+    '<button class="btn btn-sm" type="button" data-copy>Copy</button>' +
+    '<a class="btn btn-sm btn-wa" href="' + waLink(text + link) + '" target="_blank" rel="noopener">WhatsApp</a></div></div>';
+}
+
+function bindCopy(root) {
+  root.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
+    copyText(b.parentElement.querySelector('input').value);
+    b.textContent = 'Copied';
+    setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+  }));
+}
+
 function showResultModal(json, state, onCreated) {
   document.getElementById('wsResultModal')?.remove();
-
   const ws = json.workspace || {};
-  const invites = json.invites || {};
-  const adminInvite = invites.admin || {};
-  const mgrInvite = invites.manager || {};
-  const adminUrl = adminInvite.inviteUrl || '';
-  const mgrUrl   = mgrInvite.inviteUrl   || '';
+  const inv = json.invites || {};
+  const name = ws.name || state.name;
+  const part = (key, label) => !inv[key] ? '' :
+    (inv[key].link ? linkRow(label, inv[key].link, label.replace(' link', '') + ' for ' + name + ' — set your password: ')
+                   : '<p class="wf-err">' + esc(label) + ' failed: ' + esc(inv[key].error || 'unknown error') + '</p>');
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'wsResultModal';
   overlay.innerHTML =
     '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="resultTitle">' +
-      '<div class="modal-head">' +
-        '<h3 class="modal-title" id="resultTitle">Workspace Created!</h3>' +
-        '<button class="modal-close" id="resultClose" type="button" aria-label="Close">' + icon('x', 18) + '</button>' +
-      '</div>' +
+      '<div class="modal-head"><h3 class="modal-title" id="resultTitle">Workspace Created</h3>' +
+        '<button class="modal-close" id="resultClose" type="button" aria-label="Close">' + icon('x', 18) + '</button></div>' +
       '<div class="modal-body">' +
-        '<div class="result-block">' +
-          '<p class="result-ws-name">' + esc(ws.name || state.name) + '</p>' +
-          '<p class="result-ws-slug muted small">/' + esc(ws.slug || state.slug) + ' · ' + esc(ws.short_code || state.short_code) + '</p>' +
-        '</div>' +
-        (adminUrl
-          ? '<div class="wf-group">' +
-              '<label class="wf-label">Admin Invite Link</label>' +
-              '<div class="copy-row">' +
-                '<input class="wf-input" readonly value="' + esc(adminUrl) + '" id="adminInviteInput">' +
-                '<button class="btn btn-sm" type="button" id="copyAdmin">Copy</button>' +
-                '<a class="btn btn-sm btn-wa" href="' + waLink('Admin invite for ' + esc(ws.name || state.name) + ': ' + adminUrl) + '" target="_blank" rel="noopener">WhatsApp</a>' +
-              '</div>' +
-            '</div>'
-          : (adminInvite.error ? '<p class="wf-err">Admin invite failed: ' + esc(adminInvite.error) + '</p>' : '')) +
-        (mgrUrl
-          ? '<div class="wf-group">' +
-              '<label class="wf-label">Manager Invite Link</label>' +
-              '<div class="copy-row">' +
-                '<input class="wf-input" readonly value="' + esc(mgrUrl) + '" id="mgrInviteInput">' +
-                '<button class="btn btn-sm" type="button" id="copyMgr">Copy</button>' +
-                '<a class="btn btn-sm btn-wa" href="' + waLink('Manager invite for ' + esc(ws.name || state.name) + ': ' + mgrUrl) + '" target="_blank" rel="noopener">WhatsApp</a>' +
-              '</div>' +
-            '</div>'
-          : (mgrInvite.error ? '<p class="wf-err">Manager invite failed: ' + esc(mgrInvite.error) + '</p>' : '')) +
+        '<div class="result-block"><p class="result-ws-name">' + esc(name) + '</p>' +
+          '<p class="result-ws-slug muted small">/' + esc(ws.slug || state.slug) + ' · ' + esc(ws.short_code || state.short_code) + '</p></div>' +
+        part('admin', 'Admin link') + part('manager', 'Manager link') +
+        '<p class="wf-hint">Each link works once and lasts about an hour. If it expires, open the workspace and press Regenerate.</p>' +
       '</div>' +
-      '<div class="modal-foot">' +
-        '<span></span>' +
-        '<button class="btn" id="resultDone" type="button">Done</button>' +
-      '</div>' +
+      '<div class="modal-foot"><span></span><button class="btn" id="resultDone" type="button">Done</button></div>' +
     '</div>';
-
   document.body.appendChild(overlay);
-
-  function close() { overlay.remove(); onCreated(); }
+  bindCopy(overlay);
+  const close = () => { overlay.remove(); onCreated(); };
   overlay.querySelector('#resultClose').addEventListener('click', close);
   overlay.querySelector('#resultDone').addEventListener('click', close);
-  if (overlay.querySelector('#copyAdmin'))
-    overlay.querySelector('#copyAdmin').addEventListener('click', () => copyText(overlay.querySelector('#adminInviteInput').value));
-  if (overlay.querySelector('#copyMgr'))
-    overlay.querySelector('#copyMgr').addEventListener('click', () => copyText(overlay.querySelector('#mgrInviteInput').value));
+}
+
+// ── Workspace panel: details, edit, regenerate link ───────────────────────────
+async function apiFetch(sb, url, opts = {}) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(url, {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + (session?.access_token || ''), 'Content-Type': 'application/json' },
+  });
+  let json = {}; try { json = await res.json(); } catch { /* empty */ }
+  if (!res.ok) throw new Error(json.error || 'Something went wrong.');
+  return json;
+}
+
+async function openWorkspacePanel({ sb, id, onChanged }) {
+  document.getElementById('wsPanel')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'wsPanel';
+  overlay.innerHTML =
+    '<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="panelTitle">' +
+      '<div class="modal-head"><h3 class="modal-title" id="panelTitle">Workspace</h3>' +
+        '<button class="modal-close" id="panelClose" type="button" aria-label="Close">' + icon('x', 18) + '</button></div>' +
+      '<div class="modal-body" id="panelBody"><p class="muted">Loading…</p></div>' +
+      '<div class="modal-foot" id="panelFoot"></div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#panelClose').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  const body = overlay.querySelector('#panelBody'), foot = overlay.querySelector('#panelFoot');
+  let d;
+  try { d = await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id)); }
+  catch (e) { body.innerHTML = '<p class="wf-err">' + esc(e.message) + '</p>'; return; }
+
+  const ws = d.workspace;
+  const roles = Object.fromEntries(ROLES.map((r) => {
+    const f = d.roles.find((x) => x.role === r.id);
+    return [r.id, { use: !!f, edit: !!(f && f.edit) }];
+  }));
+  const sub = d.subscription;
+  const planText = sub ? (CYCLE_LABEL[sub.cycle] || sub.cycle) + ' · ' + sub.currency + ' ' + Number(sub.amount_original).toLocaleString('en-US') : 'No plan';
+  const who = { admin: 'Admin', manager: 'Manager', member: 'Member' };
+
+  overlay.querySelector('#panelTitle').textContent = ws.name;
+  body.innerHTML =
+    '<div class="wf-group"><label class="wf-label" for="pName">Business name</label>' +
+      '<input class="wf-input" id="pName" maxlength="80" value="' + esc(ws.name) + '"></div>' +
+    '<div class="wf-group"><label class="wf-label" for="pStatus">Status</label>' +
+      '<select class="wf-select" id="pStatus">' +
+        Object.keys(STATUS_LABEL).map((k) => '<option value="' + k + '"' + (ws.status === k ? ' selected' : '') + '>' + STATUS_LABEL[k] + '</option>').join('') +
+      '</select></div>' +
+    '<div class="result-block">' +
+      row('Slug', '/' + ws.slug) + row('Code', ws.short_code) +
+      row('Type', TYPE_LABEL[ws.type] || ws.type) + row('Plan', planText) +
+    '</div>' +
+    '<h4 class="panel-h">Roles</h4>' + rolesTableHTML(roles) +
+    '<h4 class="panel-h">Team</h4><div id="teamList">' +
+      (d.team.length ? d.team.map((p) =>
+        '<div class="team-row" data-u="' + esc(p.id) + '">' +
+          '<div class="team-main"><strong>' + esc(p.name || who[p.account_type]) + '</strong>' +
+            '<span class="muted small">' + esc(who[p.account_type]) + (p.email ? ' · ' + esc(p.email) : '') + '</span></div>' +
+          '<span class="chip chip-' + (p.pending ? 'warn' : 'ok') + '">' + (p.pending ? 'Invite pending' : 'Active') + '</span>' +
+          '<button class="btn btn-sm btn-ghost" type="button" data-regen="' + esc(p.id) + '">Regenerate link</button>' +
+          '<div class="team-link" hidden></div>' +
+        '</div>').join('') : '<p class="muted small">No people yet.</p>') +
+    '</div>' +
+    '<p id="panelErr" class="wf-err" hidden></p>';
+  bindRolesTable(body, roles);
+
+  const err = body.querySelector('#panelErr');
+  const showErr = (m) => { err.textContent = m; err.hidden = !m; };
+
+  body.querySelectorAll('[data-regen]').forEach((b) => b.addEventListener('click', async () => {
+    const row_ = b.closest('.team-row'), box = row_.querySelector('.team-link');
+    b.disabled = true; b.textContent = 'Working…'; showErr('');
+    try {
+      const r = await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=link',
+        { method: 'POST', body: JSON.stringify({ user_id: b.dataset.regen }) });
+      box.hidden = false;
+      box.innerHTML = linkRow('New link (valid ' + r.expires + ')', r.link, 'Set your password for ' + ws.name + ': ') +
+        '<button class="btn btn-sm btn-ghost" type="button" data-mail>Email it</button><span class="muted small" data-mailnote></span>';
+      bindCopy(box);
+      box.querySelector('[data-mail]').addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        try {
+          const m = await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=link',
+            { method: 'POST', body: JSON.stringify({ user_id: b.dataset.regen, send: true }) });
+          box.querySelector('[data-mailnote]').textContent = m.emailed ? ' Email sent.' : ' Email could not be sent. Use Copy or WhatsApp.';
+        } catch (x) { box.querySelector('[data-mailnote]').textContent = ' ' + x.message; }
+      });
+    } catch (x) { showErr(x.message); }
+    b.disabled = false; b.textContent = 'Regenerate link';
+  }));
+
+  foot.innerHTML = '<button class="btn btn-ghost" id="panelCancel" type="button">Close</button>' +
+    '<button class="btn" id="panelSave" type="button">Save changes</button>';
+  foot.querySelector('#panelCancel').addEventListener('click', close);
+  foot.querySelector('#panelSave').addEventListener('click', async (e) => {
+    const name = body.querySelector('#pName').value.trim();
+    if (!name) return shakeField(body.querySelector('#pName'), 'Business name is required.');
+    e.target.disabled = true; e.target.textContent = 'Saving…'; showErr('');
+    try {
+      await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({
+        name, status: body.querySelector('#pStatus').value,
+        roles: ROLES.filter((r) => roles[r.id].use).map((r) => ({ role: r.id, edit: roles[r.id].edit })),
+      }) });
+      close(); onChanged();
+    } catch (x) { showErr(x.message); e.target.disabled = false; e.target.textContent = 'Save changes'; }
+  });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -532,9 +638,9 @@ function slugify(v) {
 }
 
 function codeify(v) {
-  const words = v.trim().split(/\s+/);
-  if (words.length >= 2) return words.slice(0, 3).map((w) => w[0] || '').join('').toUpperCase().slice(0, 6);
-  return v.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4);
+  const words = v.toUpperCase().replace(/[^A-Z\s]/g, '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return words.slice(0, 4).map((w) => w[0]).join('');
+  return (words[0] || '').slice(0, 4);
 }
 
 function rolesSummary(map) {

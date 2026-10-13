@@ -344,3 +344,13 @@ button{font:inherit;color:inherit}
 /* Invite link row (result modal) */
 .copy-row{display:flex;gap:8px;align-items:center}
 .copy-row .wf-input{flex:1;font-size:12px}
+
+/* ── Workspace panel ───────────────────────────────────────────── */
+.modal-wide{max-width:640px}
+.panel-h{margin:20px 0 8px;font-size:.8rem;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.06em}
+.team-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.team-row:last-child{border-bottom:0}
+.team-main{flex:1;min-width:140px}
+.team-main strong{display:block;font-size:.85rem}
+.team-link{flex-basis:100%;margin-top:6px}
+.wtable td .btn-sm{height:30px}
