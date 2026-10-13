@@ -13,9 +13,11 @@ const NAV = [
 
 const MEMBER_NAV = [
   { path: '/home', label: 'Home', icon: 'home', page: () => import('/js/pages/home.js') },
+  { path: '/projects', label: 'Projects', icon: 'folder', page: () => import('/js/pages/projects.js') },
   { path: '/team', label: 'Team', icon: 'users', page: () => import('/js/pages/team.js') },
+  { path: '/activity', label: 'Activity', icon: 'pulse', boss: true, page: () => import('/js/pages/activity.js') },
   { path: '/tasks', label: 'Tasks', icon: 'check' },
-  { path: '/leads', label: 'Leads', icon: 'pulse' },
+  { path: '/leads', label: 'Leads', icon: 'building' },
   { path: '/finance', label: 'Finance', icon: 'wallet' },
 ];
 
@@ -61,7 +63,8 @@ async function memberWorld(sb, prof) {
   document.body.dataset.world = 'business';
   document.getElementById('boot').remove();
   const pill = { admin: 'Admin', manager: 'Manager' }[prof.account_type] || 'Member';
-  mountShell(sb, prof, { nav: MEMBER_NAV, home: '/home', brand: ws.name, pill, suffix: ws.name, ws });
+  const nav = MEMBER_NAV.filter((n) => !n.boss || ['admin', 'manager'].includes(prof.account_type));
+  mountShell(sb, prof, { bell: true, nav, home: '/home', brand: ws.name, pill, suffix: ws.name, ws });
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +103,7 @@ function mountShell(sb, prof, cfg) {
         '<header class="top">' +
           '<button class="icon-btn menu-btn" id="menu" type="button" aria-label="Open menu">' + icon('menu', 20) + '</button>' +
           '<h1 class="page-title" id="pageTitle"></h1>' +
+          (cfg.bell ? '<div class="bell-wrap" id="bellWrap"></div>' : '') +
           '<div class="avatar-wrap">' +
             '<button class="avatar" id="avatar" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">' + esc(initials) + '</button>' +
             '<div class="menu" id="avatarMenu" hidden>' +
@@ -136,6 +140,8 @@ function mountShell(sb, prof, cfg) {
   document.addEventListener('click', () => setMenu(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenu(false); closeNav(); } });
   document.getElementById('signout').addEventListener('click', () => signOut(sb));
+
+  if (cfg.bell) import('/js/notify.js').then((m) => m.mountBell(sb, document.getElementById('bellWrap'))).catch(() => {});
 
   // Router
   async function route() {

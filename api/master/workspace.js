@@ -5,7 +5,7 @@
 import { requireMaster, send } from '../../lib/master-guard.js';
 import { makeLink, maskEmail, readJson, siteUrl } from '../../lib/invites.js';
 
-const ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager'];
+const ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager', 'project_agent'];
 const STATUSES = ['setup', 'trial', 'active', 'suspended', 'archived'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

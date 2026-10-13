@@ -2,19 +2,19 @@ import { esc, icon, toast } from '/js/ui.js';
 import { isEmail, EMAIL_MSG } from '/js/validate.js';
 import { openModal, api, fieldError, linkRow, bindCopy } from '/js/modal.js';
 import { bindCombo } from '/js/combo.js';
+import { DEPARTMENTS, DESIGNATIONS } from '/js/lists.js';
 
-const ROLE_LABEL = { sales_rep: 'Sales Representative', lead_gen: 'Lead Generation', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager' };
+const ROLE_LABEL = { sales_rep: 'Sales Representative', lead_gen: 'Lead Generation', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager', project_agent: 'Project Agent' };
 const TYPE_LABEL = { admin: 'Admin', manager: 'Manager', member: 'Member' };
-const ROLE_COLOR = { sales_rep: '#2563eb', lead_gen: '#0891b2', cold_caller: '#ea580c', finance: '#16a34a', project_manager: '#d97706' };
+const ROLE_COLOR = { sales_rep: '#2563eb', lead_gen: '#0891b2', cold_caller: '#ea580c', finance: '#16a34a', project_manager: '#d97706', project_agent: '#64748b' };
 const ROLE_DESC = {
   sales_rep: 'Client conversations, proposals and closing deals',
   lead_gen: 'Finding and qualifying new prospects',
   cold_caller: 'Calling prospects and booking meetings',
   finance: 'Invoices, payments and financial records',
   project_manager: 'Running delivery for the clients assigned to them',
+  project_agent: 'Hands-on project work, assigned by department',
 };
-const DEPARTMENTS = ['Sales', 'Marketing', 'Design', 'Development', 'Finance', 'Operations', 'Support'];
-const DESIGNATIONS = ['Sales Representative', 'Lead Generation Executive', 'Cold Caller', 'Accountant', 'Project Manager', 'Designer', 'Developer', 'Team Lead'];
 
 export default async function render({ el, sb, profile, setTitle }) {
   setTitle('Team');
@@ -39,12 +39,17 @@ const statusChip = (p) => p.status === 'inactive'
   : p.pending ? '<span class="chip chip-warn">Invite pending</span>' : '<span class="chip chip-ok">Active</span>';
 const roleChips = (roles) => (roles || []).map((r) => '<span class="chip chip-accent">' + esc(ROLE_LABEL[r] || r) + '</span>').join(' ');
 
+const reportsTo = (p, all) => {
+  const b = p.reports_to && all.find((x) => x.id === p.reports_to);
+  return b ? '<span class="muted small">Reports to ' + esc(b.name || '') + '</span>' : '';
+};
+
 // ── Read-only directory for plain members (no emails, no phones) ────────────
 function paintDirectory(el, rows) {
   el.innerHTML = '<div class="page-head"><h2 class="page-title">Team</h2></div>' +
     '<div class="table-wrap"><table class="wtable"><thead><tr><th>Name</th><th>Type</th><th>Department</th><th>Roles</th><th>Status</th></tr></thead><tbody>' +
     rows.map((p) => '<tr><td data-l="Name" class="c-name"><strong>' + esc(p.name || '—') + '</strong><span class="muted small">' + esc(p.job_title || '') + '</span></td>' +
-      '<td data-l="Type">' + esc(TYPE_LABEL[p.account_type] || '') + '</td><td data-l="Department">' + esc(p.department || '—') + '</td>' +
+      '<td data-l="Type">' + esc(TYPE_LABEL[p.account_type] || '') + '</td><td data-l="Department">' + esc(p.department || '—') + reportsTo(p, rows) + '</td>' +
       '<td data-l="Roles">' + (roleChips(p.roles) || '—') + '</td>' +
       '<td data-l="Status">' + (p.status === 'inactive' ? '<span class="chip chip-muted">Inactive</span>' : '<span class="chip chip-ok">Active</span>') + '</td></tr>').join('') +
     '</tbody></table></div>';
@@ -71,7 +76,7 @@ function paintManager(el, sb, d, reload) {
     rows.innerHTML = shown.map((p) =>
       '<tr><td data-l="Name" class="c-name"><strong>' + esc(p.name || '—') + '</strong><span class="muted small">' + esc(p.email || '') + '</span></td>' +
       '<td data-l="Type">' + esc(TYPE_LABEL[p.account_type]) + '<span class="muted small">' + esc(p.job_title || '') + '</span></td>' +
-      '<td data-l="Department">' + esc(p.department || '—') + '</td>' +
+      '<td data-l="Department">' + esc(p.department || '—') + reportsTo(p, people) + '</td>' +
       '<td data-l="Roles">' + (roleChips(p.roles) || '—') + '</td>' +
       '<td data-l="Status">' + statusChip(p) + '</td>' +
       '<td data-l="">' + (p.manageable ? '<button class="btn btn-sm btn-ghost" type="button" data-edit="' + esc(p.id) + '">Open</button>' : '') + '</td></tr>').join('');
@@ -126,6 +131,9 @@ function openMemberModal({ sb, d, person, onDone }) {
             '<span class="rc-box"></span><span class="rc-text"><span class="rc-name"><i class="rc-dot" style="background:' + c.color + '"></i>' + esc(c.label) + '</span>' +
             '<span class="rc-desc">' + esc(c.desc) + '</span></span></button>').join('') + '</div>'
           : '<p class="wf-hint">No extra roles are switched on for this workspace.</p>') + '</div>' +
+      '<div class="wf-group" id="tBossGroup" hidden><label class="wf-label" for="tBoss">Reports to</label>' +
+        '<select class="wf-select" id="tBoss"></select>' +
+        '<p class="wf-hint">Managers of the chosen department are listed first.</p></div>' +
       (editing ? '<div id="tLinkBox"></div>' : '') +
       '<p class="wf-err" id="tErr" hidden></p>',
     foot: editing
@@ -144,12 +152,38 @@ function openMemberModal({ sb, d, person, onDone }) {
     b.classList.toggle('is-checked', on); b.setAttribute('aria-checked', on);
   }));
   bindCombo($('tDept'), DEPARTMENTS); bindCombo($('tDesig'), DESIGNATIONS);
+
+  // "Reports to": shown for Project Agents (members only). Managers of the picked department come first.
+  let boss = person ? person.reports_to || '' : '', bossTouched = !!boss;
+  const bossSel = $('tBoss');
+  const same = (a, b) => a && b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  const bossLabel = (x) => esc(x.name || 'Unnamed') + ' (' + (x.account_type === 'admin' ? 'Admin' : (x.department ? x.department + ' manager' : 'Manager')) + ')';
+  function paintBoss() {
+    const dept = $('tDept').value.trim();
+    const list = (d.managers || []).filter((x) => !person || x.id !== person.id);
+    const mine = list.filter((x) => x.account_type === 'manager' && same(x.department, dept));
+    const rest = list.filter((x) => !mine.includes(x));
+    if (!boss && !bossTouched && mine.length) boss = mine[0].id;
+    const o = (x) => '<option value="' + esc(x.id) + '"' + (x.id === boss ? ' selected' : '') + '>' + bossLabel(x) + '</option>';
+    bossSel.innerHTML = '<option value="">Not set</option>' +
+      (mine.length ? '<optgroup label="' + esc(dept) + ' department">' + mine.map(o).join('') + '</optgroup>' : '') +
+      (rest.length ? '<optgroup label="' + (mine.length ? 'Other managers' : 'Managers and admin') + '">' + rest.map(o).join('') + '</optgroup>' : '');
+  }
+  const showBoss = () => {
+    const agent = sel.has('project_agent') && accType !== 'manager';
+    $('tBossGroup').hidden = !agent; if (agent) paintBoss();
+  };
+  bossSel.addEventListener('change', () => { boss = bossSel.value; bossTouched = true; });
+  $('tDept').addEventListener('input', () => { if (!$('tBossGroup').hidden) { if (!bossTouched) boss = ''; paintBoss(); } });
+  m.body.querySelectorAll('.role-card').forEach((b) => b.addEventListener('click', showBoss));
+  showBoss();
   if ($('tCancel')) $('tCancel').addEventListener('click', m.close);
 
   const payload = () => ({
     name: $('tName').value.trim(), phone: $('tPhone').value.trim(), joining_date: $('tJoin').value,
     department: $('tDept').value.trim(), designation: $('tDesig').value.trim(), roles: [...sel],
     ...(canType ? { account_type: accType } : {}),
+    ...(sel.has('project_agent') && accType !== 'manager' ? { reports_to: boss || null } : (editing ? { reports_to: null } : {})),
   });
 
   $('tSave').addEventListener('click', async (e) => {

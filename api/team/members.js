@@ -27,7 +27,7 @@ export default async function handler(req, res) {
   if (!id || !UUID.test(id)) return send(res, 400, { error: 'Invalid person' });
   // The target must belong to the caller's workspace. Anything else looks like "not found".
   const { data: target } = await admin.from('profiles')
-    .select('id,name,email,account_type,status,workspace_id,is_master').eq('id', id).eq('workspace_id', workspace.id).maybeSingle();
+    .select('id,name,email,account_type,status,workspace_id,is_master,reports_to').eq('id', id).eq('workspace_id', workspace.id).maybeSingle();
   if (!target || target.is_master) return send(res, 404, { error: 'Person not found' });
   if (!canManage(me.account_type, target.account_type, target.id === me.id)) return send(res, 403, { error: 'You cannot manage this person' });
 
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 
 async function list(admin, ws, me, activeRoles, res) {
   const { data, error } = await admin.from('profiles')
-    .select('id,name,email,phone,joining_date,department,job_title,account_type,status,roles,last_seen_at')
+    .select('id,name,email,phone,joining_date,department,job_title,account_type,status,roles,reports_to,last_seen_at')
     .eq('workspace_id', ws.id).eq('is_master', false).order('created_at', { ascending: true });
   if (error) return send(res, 502, { error: error.message });
   const people = [];
@@ -47,7 +47,9 @@ async function list(admin, ws, me, activeRoles, res) {
     try { const u = await admin.auth.admin.getUserById(p.id); pending = !u.data?.user?.last_sign_in_at; } catch { /* ignore */ }
     people.push({ ...p, pending, manageable: canManage(me.account_type, p.account_type, p.id === me.id) });
   }
-  send(res, 200, { people, roles: activeRoles, me: { id: me.id, account_type: me.account_type }, workspace: { name: ws.name, slug: ws.slug } });
+  const managers = people.filter((x) => x.status === 'active' && ['admin', 'manager'].includes(x.account_type))
+    .map((x) => ({ id: x.id, name: x.name, department: x.department, account_type: x.account_type }));
+  send(res, 200, { people, managers, roles: activeRoles, me: { id: me.id, account_type: me.account_type }, workspace: { name: ws.name, slug: ws.slug } });
 }
 
 async function create(admin, ws, me, activeRoles, req, res) {
@@ -56,6 +58,9 @@ async function create(admin, ws, me, activeRoles, req, res) {
   const type = body.account_type || 'member';
   if (!canAssignType(me.account_type, type)) errors.push('You cannot add this kind of person');
   if (errors.length) return send(res, 400, { error: errors.join('; ') });
+
+  if (type !== 'member') v.reports_to = null;
+  if (v.reports_to && !(await validBoss(admin, ws.id, v.reports_to))) return send(res, 400, { error: 'Pick a manager from this workspace' });
 
   const { data: ex } = await admin.from('profiles').select('id').eq('email', v.email).maybeSingle();
   if (ex) return send(res, 409, { error: 'This email already has an account.' });
@@ -66,6 +71,7 @@ async function create(admin, ws, me, activeRoles, req, res) {
   const { error } = await admin.from('profiles').update({
     workspace_id: ws.id, account_type: type, name: v.name, phone: v.phone ?? null,
     joining_date: v.joining_date ?? null, department: v.department ?? null, job_title: v.job_title ?? null, roles: v.roles,
+    reports_to: v.reports_to ?? null,
   }).eq('id', r.user.id);
   if (error) {
     try { await admin.auth.admin.deleteUser(r.user.id); } catch { /* best effort: no half-made account */ }
@@ -84,6 +90,9 @@ async function edit(admin, me, target, activeRoles, req, res) {
   }
   if (v.status !== undefined && self) errors.push('You cannot change your own status');
   if (errors.length) return send(res, 400, { error: errors.join('; ') });
+  const finalType = v.account_type || target.account_type;
+  if (finalType !== 'member') { if (target.reports_to || v.reports_to !== undefined || v.account_type) v.reports_to = null; }
+  else if (v.reports_to && !(await validBoss(admin, target.workspace_id, v.reports_to, target.id))) return send(res, 400, { error: 'Pick a manager from this workspace' });
   if (!Object.keys(v).length) return send(res, 200, { ok: true });
 
   const { error } = await admin.from('profiles').update(v).eq('id', target.id).eq('workspace_id', target.workspace_id);
@@ -101,4 +110,10 @@ async function regenerate(admin, ws, target, req, res) {
     emailed = !error;
   }
   send(res, 200, { link: r.link, emailed, expires: 'about 1 hour' });
+}
+
+async function validBoss(admin, wsId, bossId, selfId) {
+  if (bossId === selfId) return false;
+  const { data } = await admin.from('profiles').select('id,account_type,status').eq('id', bossId).eq('workspace_id', wsId).maybeSingle();
+  return !!data && data.status === 'active' && ['admin', 'manager'].includes(data.account_type);
 }

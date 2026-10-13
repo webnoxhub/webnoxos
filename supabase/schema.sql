@@ -525,6 +525,7 @@ create policy profiles_workspace_read on public.profiles for select
   using ( workspace_id is not null and workspace_id = public.current_workspace() and public.is_manager() );
 
 -- Safe directory for every member of a workspace: no email, no phone.
+drop function if exists public.team_directory();
 create or replace function public.team_directory()
 returns table (id uuid, name text, job_title text, department text, account_type text,
                status text, roles text[], last_seen_at timestamptz)
@@ -537,3 +538,177 @@ language sql stable security definer set search_path = public as $$
 $$;
 revoke all on function public.team_directory() from public, anon;
 grant execute on function public.team_directory() to authenticated;
+
+
+-- ============================================================================
+-- PART 6 — Project Agent role, who a person reports to
+-- ============================================================================
+-- Run this whole part once in the Supabase SQL Editor.
+
+alter table public.workspace_roles drop constraint if exists workspace_roles_role_key_check;
+alter table public.workspace_roles add constraint workspace_roles_role_key_check
+  check (role_key in ('sales_rep','lead_gen','cold_caller','finance','project_manager','project_agent'));
+
+-- Existing workspaces get Project Agent switched on (the Master can still turn it off).
+insert into public.workspace_roles (workspace_id, role_key, active, can_edit)
+select id, 'project_agent', true, false from public.workspaces
+on conflict (workspace_id, role_key) do nothing;
+
+-- A person reports to one Manager (or the Admin) of the same workspace.
+alter table public.profiles add column if not exists reports_to uuid references public.profiles(id) on delete set null;
+
+create or replace function public.profile_reports_to_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.reports_to is not null then
+    if new.reports_to = new.id then raise exception 'A person cannot report to himself'; end if;
+    if not exists (select 1 from public.profiles m
+                   where m.id = new.reports_to and m.workspace_id is not distinct from new.workspace_id
+                     and m.account_type in ('admin','manager')) then
+      raise exception 'Reports-to must be a Manager or Admin of the same workspace';
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists profiles_reports_to_guard on public.profiles;
+create trigger profiles_reports_to_guard before insert or update of reports_to, workspace_id on public.profiles
+  for each row execute function public.profile_reports_to_guard();
+
+-- Directory now also says who someone reports to.
+drop function if exists public.team_directory();
+create or replace function public.team_directory()
+returns table (id uuid, name text, job_title text, department text, account_type text,
+               status text, roles text[], last_seen_at timestamptz, reports_to uuid)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.name, p.job_title, p.department, p.account_type, p.status, p.roles, p.last_seen_at, p.reports_to
+  from public.profiles p
+  where p.workspace_id is not null
+    and p.workspace_id = public.current_workspace()
+    and p.is_master = false
+$$;
+revoke all on function public.team_directory() from public, anon;
+grant execute on function public.team_directory() to authenticated;
+
+
+-- ============================================================================
+-- PART 7 — Projects, staffing requests, approvals, notifications, activity
+-- ============================================================================
+-- Run this whole part once in the Supabase SQL Editor.
+-- All reads and writes go through /api/projects and /api/inbox (server, service key).
+-- RLS is on with no browser policies, so the browser can never touch these tables directly.
+
+create table if not exists public.projects (
+  id           uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id),
+  name         text not null check (char_length(btrim(name)) between 1 and 120),
+  client       text check (client is null or char_length(client) <= 120),
+  description  text check (description is null or char_length(description) <= 2000),
+  status       text not null default 'active' check (status in ('active','on_hold','completed')),
+  manager_id   uuid references public.profiles(id) on delete set null,
+  created_by   uuid references public.profiles(id) on delete set null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists projects_ws_idx on public.projects (workspace_id, created_at desc);
+
+create table if not exists public.staffing_requests (
+  id            uuid primary key default gen_random_uuid(),
+  workspace_id  uuid not null references public.workspaces(id),
+  project_id    uuid not null references public.projects(id) on delete cascade,
+  requested_by  uuid references public.profiles(id) on delete set null,
+  status        text not null default 'pending' check (status in ('pending','discussing','approved','declined')),
+  note          text check (note is null or char_length(note) <= 500),
+  decided_by    uuid references public.profiles(id) on delete set null,
+  decided_at    timestamptz,
+  decision_note text check (decision_note is null or char_length(decision_note) <= 500),
+  created_at    timestamptz not null default now()
+);
+create index if not exists staffing_requests_project_idx on public.staffing_requests (project_id, created_at desc);
+
+create table if not exists public.staffing_request_items (
+  id          uuid primary key default gen_random_uuid(),
+  request_id  uuid not null references public.staffing_requests(id) on delete cascade,
+  designation text not null check (char_length(btrim(designation)) between 1 and 60),
+  department  text check (department is null or char_length(department) <= 60),
+  qty         int  not null check (qty between 1 and 20)
+);
+create index if not exists staffing_items_request_idx on public.staffing_request_items (request_id);
+
+create table if not exists public.project_members (
+  project_id uuid not null references public.projects(id) on delete cascade,
+  user_id    uuid not null references public.profiles(id) on delete cascade,
+  item_id    uuid references public.staffing_request_items(id) on delete set null,
+  added_by   uuid references public.profiles(id) on delete set null,
+  added_at   timestamptz not null default now(),
+  primary key (project_id, user_id)
+);
+
+create table if not exists public.request_comments (
+  id         uuid primary key default gen_random_uuid(),
+  request_id uuid not null references public.staffing_requests(id) on delete cascade,
+  author_id  uuid references public.profiles(id) on delete set null,
+  body       text not null check (char_length(btrim(body)) between 1 and 1000),
+  created_at timestamptz not null default now()
+);
+create index if not exists request_comments_idx on public.request_comments (request_id, created_at);
+
+create table if not exists public.activity_log (
+  id           uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id),
+  actor_id     uuid references public.profiles(id) on delete set null,
+  project_id   uuid references public.projects(id) on delete set null,
+  request_id   uuid references public.staffing_requests(id) on delete set null,
+  text         text not null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists activity_ws_idx on public.activity_log (workspace_id, created_at desc);
+
+create table if not exists public.notifications (
+  id           uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id),
+  user_id      uuid not null references public.profiles(id) on delete cascade,
+  text         text not null,
+  project_id   uuid references public.projects(id) on delete cascade,
+  request_id   uuid references public.staffing_requests(id) on delete cascade,
+  read_at      timestamptz,
+  created_at   timestamptz not null default now()
+);
+create index if not exists notifications_user_idx on public.notifications (user_id, created_at desc);
+
+-- Integrity guards (the API checks the same things; these make a bug impossible to exploit).
+create or replace function public.project_manager_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.manager_id is not null then
+    if not exists (select 1 from public.profiles p
+                   where p.id = new.manager_id and p.workspace_id = new.workspace_id
+                     and p.status = 'active' and 'project_manager' = any(p.roles)) then
+      raise exception 'Project manager must be an active Project Manager of this workspace';
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists projects_manager_guard on public.projects;
+create trigger projects_manager_guard before insert or update of manager_id on public.projects
+  for each row execute function public.project_manager_guard();
+
+create or replace function public.project_member_guard() returns trigger
+language plpgsql as $$
+begin
+  if not exists (select 1 from public.projects j join public.profiles p on p.workspace_id = j.workspace_id
+                 where j.id = new.project_id and p.id = new.user_id) then
+    raise exception 'Member must belong to the same workspace as the project';
+  end if;
+  return new;
+end $$;
+drop trigger if exists project_members_guard on public.project_members;
+create trigger project_members_guard before insert on public.project_members
+  for each row execute function public.project_member_guard();
+
+alter table public.projects               enable row level security;
+alter table public.staffing_requests      enable row level security;
+alter table public.staffing_request_items enable row level security;
+alter table public.project_members        enable row level security;
+alter table public.request_comments       enable row level security;
+alter table public.activity_log           enable row level security;
+alter table public.notifications          enable row level security;

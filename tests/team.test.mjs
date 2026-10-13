@@ -33,6 +33,13 @@ ok('edit only checks fields that are present', r.errors.length === 0 && Object.k
 r = checkMember({ account_type: 'admin' }, active, { create: false });
 ok('nobody can be set to admin through the form', r.errors.length === 1);
 
+r = checkMember({ roles: ['project_agent'], reports_to: '7f9c24e8-3b1a-4c55-9a6e-1d2b3c4d5e6f' }, ['project_agent'], { create: false });
+ok('project_agent role and a manager id are accepted', r.errors.length === 0 && r.value.reports_to);
+r = checkMember({ reports_to: 'not-an-id' }, active, { create: false });
+ok('garbage manager id refused', r.errors.length === 1);
+r = checkMember({ reports_to: '' }, active, { create: false });
+ok('empty manager id clears it', r.errors.length === 0 && r.value.reports_to === null);
+
 // --- guard
 const tokens = {
   tAdmin: { id: 'a1' }, tMgr: { id: 'm1' }, tMem: { id: 'p1' }, tMaster: { id: 'ms' }, tOff: { id: 'x1' }, tSusp: { id: 's1' },

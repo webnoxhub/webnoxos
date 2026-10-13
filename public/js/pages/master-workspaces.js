@@ -16,6 +16,7 @@ const ROLES = [
   { id: 'cold_caller',     label: 'Cold Caller' },
   { id: 'finance',         label: 'Finance' },
   { id: 'project_manager', label: 'Project Manager' },
+  { id: 'project_agent',   label: 'Project Agent' },
 ];
 
 const PLANS = [

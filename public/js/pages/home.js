@@ -1,6 +1,6 @@
 import { esc } from '/js/ui.js';
 
-const ROLE_LABEL = { sales_rep: 'Sales Rep', lead_gen: 'Lead Gen', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager' };
+const ROLE_LABEL = { sales_rep: 'Sales Rep', lead_gen: 'Lead Gen', cold_caller: 'Cold Caller', finance: 'Finance', project_manager: 'Project Manager', project_agent: 'Project Agent' };
 const TYPE_LABEL = { admin: 'Admin', manager: 'Manager', member: 'Member' };
 
 export default async function render({ el, sb, profile, setTitle, workspace }) {

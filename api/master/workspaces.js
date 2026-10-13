@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { isEmail } from '../../lib/validate.js';
 import { makeLink } from '../../lib/invites.js';
 
-const ALLOWED_ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager'];
+const ALLOWED_ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manager', 'project_agent'];
 const ALLOWED_CYCLES = ['trial_7', 'trial_14', 'monthly', 'quarterly', 'yearly'];
 const ALLOWED_TYPES = ['rented', 'master_project'];
 

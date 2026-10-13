@@ -86,6 +86,14 @@ await db.query(`insert into workspace_roles(workspace_id,role_key,active) values
 await db.query(`update profiles set roles='{finance}', phone='0300', joining_date='2026-10-13' where id='${mem}'`);
 ok('an activated role can be held', (await db.query(`select roles from profiles where id='${mem}'`)).rows[0].roles[0] === 'finance');
 await throws('unknown role key is refused', `update profiles set roles='{ceo}' where id='${mem}'`, 'not activated');
+// Part 6: Project Agent + reports_to
+await db.query(`insert into workspace_roles(workspace_id,role_key,active) values ('${wsA.id}','project_agent',true)`);
+await db.query(`update profiles set roles='{finance,project_agent}', reports_to='${a1}' where id='${mem}'`);
+ok('a Project Agent can report to the admin of his workspace', (await db.query(`select reports_to from profiles where id='${mem}'`)).rows[0].reports_to === a1);
+await throws('cannot report to himself', `update profiles set reports_to='${mem}' where id='${mem}'`, 'himself');
+await throws('cannot report to a plain member', `update profiles set reports_to='${mem}' where id='${a1}'`, 'Reports-to');
+await throws('cannot report to someone of another workspace', `update profiles set reports_to='${a2}' where id='${mem}'`, 'Reports-to');
+ok('team_directory carries reports_to', (await as(mem, `select reports_to from team_directory() where id='${mem}'`))[0].reports_to === a1);
 ok('Master reads every workspace', (await as(m1, `select id from workspaces`)).length === 2);
 ok('Master reads his own profile (login check)', (await as(m1, `select is_master from profiles where id='${m1}'`))[0]?.is_master === true);
 ok('Master cannot read member profiles directly', (await as(m1, `select id from profiles where id='${mem}'`)).length === 0);
