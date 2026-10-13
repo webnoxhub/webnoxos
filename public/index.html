@@ -11,6 +11,8 @@
       var h = location.hash || '';
       if (/type=(invite|recovery)/.test(h) || /error_code=/.test(h)) {
         location.replace('/set-password.html' + h);
+      } else {
+        location.replace('/login.html');
       }
     })();
   </script>

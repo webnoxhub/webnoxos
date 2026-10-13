@@ -135,6 +135,24 @@ export async function initSetPassword() {
     return;
   }
   history.replaceState(null, '', location.pathname); // remove the token from the address bar
+
+  // Whose workspace is this? Show its name; the Master keeps the dark look.
+  let slug = '';
+  try {
+    const { data: me } = await sb.from('profiles').select('is_master,workspace_id').eq('id', session.user.id).maybeSingle();
+    if (me && me.is_master) {
+      document.body.classList.remove('sp-light');
+      document.getElementById('spFoot').hidden = true;
+    } else if (me && me.workspace_id) {
+      const { data: w } = await sb.from('workspaces').select('name,slug').eq('id', me.workspace_id).maybeSingle();
+      if (w) {
+        document.getElementById('spBrand').textContent = w.name;
+        document.getElementById('spTier').textContent = 'Welcome aboard';
+        document.title = 'Set your password · ' + w.name;
+        slug = w.slug || '';
+      }
+    }
+  } catch { /* the form still works without the name */ }
   form.hidden = false;
   pass.focus();
 
@@ -158,6 +176,7 @@ export async function initSetPassword() {
       try { await sb.auth.signOut(); } catch { /* ignore */ }
       form.hidden = true;
       okEl.hidden = false;
+      if (slug) { const go = document.getElementById('spGo'); go.addEventListener('click', () => { location.href = '/login.html?w=' + encodeURIComponent(slug); }); go.hidden = false; }
       return;
     }
     submit.disabled = false; submit.classList.remove('is-busy'); pass.disabled = false; pass2.disabled = false;
