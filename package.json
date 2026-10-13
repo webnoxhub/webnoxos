@@ -10,9 +10,10 @@
   "scripts": {
     "dev": "node --env-file=.env server.js",
     "start": "node server.js",
-    "test": "node tests/static.test.mjs && node tests/db.test.mjs",
+    "test": "node tests/static.test.mjs && node tests/guard.test.mjs && node tests/db.test.mjs",
     "test:static": "node tests/static.test.mjs",
-    "test:db": "node tests/db.test.mjs"
+    "test:db": "node tests/db.test.mjs",
+    "test:guard": "node tests/guard.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.117.2",

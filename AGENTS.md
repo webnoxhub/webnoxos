@@ -13,3 +13,14 @@ Stack: plain HTML/CSS/vanilla JS modules, one Express file (`server.js`), Supaba
 
 ## Phase log
 - **M0** — package.json, server.js (`/api/config`), vercel.json (`/master-signin` rewrite), .env.example, .gitignore, placeholder pages, robots.txt.
+- **M1** — `/master-signin` (dark glass card, network-dots canvas background), `css/auth.css`, `js/auth.js` (`initMasterLogin`), `js/supabase.js`, `js/net-bg.js`, favicon. One refusal sentence for every failure, 600 ms floor.
+- **M2** — `supabase/schema.sql` Parts 1-3 (tenancy core, Master billing tables, `promote_to_master()` capped at 3). `set-password.html` + `initSetPassword()`. `index.html` forwards invite/recovery hashes. `tests/db.test.mjs` (PGlite).
+- **M3** — `app.html` boot (config -> session -> profile -> world), Master shell (`css/master.css`, dark), `pages/master-home.js`, `pages/master-workspaces.js`, `lib/master-guard.js` + `api/master/ping.js` (401 no token, 403 non-Master), business `login.html` (white; refuses a Master with the same sentence). `api/config.js` replaces the Express route on Vercel.
+
+## Conventions
+- Vercel runs `api/*.js` as functions and serves `public/**`; `server.js` is for local dev only (`npm run dev`).
+- Every Master API route starts with `requireMaster(req)` from `lib/master-guard.js`.
+- Dates are shown in Asia/Karachi (`js/time.js`). Money shown in PKR (base currency).
+- The string `master-signin` may appear only in `public/master-signin.html`, `public/robots.txt`, `vercel.json`, `server.js` and `AGENTS.md`. `tests/static.test.mjs` enforces it for `public/`.
+- `app.html` and `login.html` never contain the word "Master"; the Master UI is built by JS only for a Master.
+- Not built yet: workspace creation (M4), branded business login (M5), Master finance, billing sweep, everything inside a business workspace.

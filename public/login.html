@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign in · Webnox OS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/css/auth.css">
+</head>
+<body class="bl-body">
+  <div class="bl-split">
+
+    <aside class="bl-art">
+      <svg class="bl-mark" viewBox="0 0 64 40" role="img" aria-label="Webnox OS">
+        <defs><linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#0891B2"/><stop offset="1" stop-color="#6D28D9"/></linearGradient></defs>
+        <path d="M8 4l2.2 5.8L16 12l-5.8 2.2L8 20l-2.2-5.8L0 12l5.8-2.2z" fill="#0891B2"/>
+        <path d="M26 6h9l-9 28h-9zM42 6h9l-9 28h-9z" fill="url(#blg)"/>
+      </svg>
+      <h2 class="bl-art-title">One place for your whole business.</h2>
+      <ul class="bl-art-list">
+        <li>Tasks that track themselves</li>
+        <li>Leads that turn into clients</li>
+        <li>Invoices and money, always clear</li>
+      </ul>
+    </aside>
+
+    <main class="bl-main">
+      <section class="bl-card">
+        <h1 class="bl-title">Sign in</h1>
+        <p class="bl-note" id="blNote" role="status" hidden></p>
+
+        <form id="blForm" novalidate autocomplete="on">
+          <div class="bl-field">
+            <label class="bl-label" for="blEmail">Email</label>
+            <input class="bl-input" id="blEmail" name="email" type="email" autocomplete="username"
+                   inputmode="email" spellcheck="false" autocapitalize="off" required>
+          </div>
+          <div class="bl-field">
+            <label class="bl-label" for="blPass">Password</label>
+            <div class="bl-pass">
+              <input class="bl-input" id="blPass" name="password" type="password" autocomplete="current-password" required>
+              <button class="bl-eye" id="blEye" type="button" aria-label="Show password" aria-pressed="false">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <p class="bl-error" id="blError" role="alert" aria-live="polite" hidden></p>
+
+          <button class="bl-submit" id="blSubmit" type="submit">
+            <span class="bl-submit-text">Sign in</span><span class="bl-spin" aria-hidden="true"></span>
+          </button>
+        </form>
+
+        <button class="bl-forgot" id="blForgot" type="button" aria-expanded="false">Forgot password?</button>
+        <p class="bl-forgot-text" id="blForgotText" hidden>Ask your admin for a new password link. They can send it to you on WhatsApp.</p>
+
+        <p class="bl-track">We record sign-in times, active and idle time, and task timers. We never record keystrokes,
+          screenshots, your camera or other apps.</p>
+      </section>
+    </main>
+
+  </div>
+
+  <script type="module">
+    import { initBusinessLogin } from '/js/auth.js';
+    initBusinessLogin();
+  </script>
+</body>
+</html>

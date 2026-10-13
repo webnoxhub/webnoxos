@@ -162,3 +162,89 @@ export async function initSetPassword() {
     showError('Could not save that password. Try a different one.');
   });
 }
+
+// ---------------------------------------------------------------------------
+// Business sign-in. A Master account is refused here with the same sentence
+// the Master page uses, so neither page hints the other exists.
+// ---------------------------------------------------------------------------
+const MESSAGES = {
+  noprofile: 'Ask your admin to add you.',
+  inactive: 'Your account is not active.',
+  closed: 'This workspace is closed.',
+};
+
+export async function initBusinessLogin() {
+  const form = document.getElementById('blForm');
+  const email = document.getElementById('blEmail');
+  const pass = document.getElementById('blPass');
+  const errorEl = document.getElementById('blError');
+  const noteEl = document.getElementById('blNote');
+  const submit = document.getElementById('blSubmit');
+  const eye = document.getElementById('blEye');
+  const forgot = document.getElementById('blForgot');
+  const forgotText = document.getElementById('blForgotText');
+
+  const code = new URLSearchParams(location.search).get('m');
+  if (code && MESSAGES[code]) { noteEl.textContent = MESSAGES[code]; noteEl.hidden = false; }
+
+  const setBusy = (on) => { submit.disabled = on; submit.classList.toggle('is-busy', on); email.disabled = on; pass.disabled = on; };
+  const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearError = () => { errorEl.textContent = ''; errorEl.hidden = true; };
+
+  eye.addEventListener('click', () => {
+    const show = pass.type === 'password';
+    pass.type = show ? 'text' : 'password';
+    eye.setAttribute('aria-pressed', String(show));
+    eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  });
+  forgot.addEventListener('click', () => {
+    forgotText.hidden = !forgotText.hidden;
+    forgot.setAttribute('aria-expanded', String(!forgotText.hidden));
+  });
+
+  let sb;
+  try { sb = await getClient(); } catch { sb = null; }
+
+  // Already signed in as a business member: go straight to the app. A Master session is cleared.
+  if (sb && !code) {
+    try {
+      const { data } = await sb.auth.getSession();
+      const user = data && data.session && data.session.user;
+      if (user) {
+        const { data: p } = await sb.from('profiles').select('is_master').eq('id', user.id).maybeSingle();
+        if (p && p.is_master === false) { location.replace('/app.html'); return; }
+        await sb.auth.signOut();
+      }
+    } catch { /* stay on the page */ }
+  }
+  email.focus();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (submit.disabled) return;
+    const mail = email.value.trim().toLowerCase();
+    const pw = pass.value;
+    if (!mail || !pw) { showError(EMPTY); return; }
+
+    setBusy(true); clearError(); noteEl.hidden = true;
+    const started = Date.now();
+    let ok = false;
+    try {
+      if (!sb) throw new Error('x');
+      const { data, error } = await sb.auth.signInWithPassword({ email: mail, password: pw });
+      if (!error && data && data.user) {
+        const { data: p } = await sb.from('profiles').select('is_master').eq('id', data.user.id).maybeSingle();
+        ok = !!p && p.is_master === false;
+      }
+    } catch { ok = false; }
+
+    if (ok) { location.replace('/app.html'); return; }
+
+    try { if (sb) await sb.auth.signOut(); } catch { /* ignore */ }
+    await new Promise((r) => setTimeout(r, Math.max(0, FLOOR_MS - (Date.now() - started))));
+    setBusy(false);
+    showError(REFUSED);
+    pass.value = '';
+    pass.focus();
+  });
+}

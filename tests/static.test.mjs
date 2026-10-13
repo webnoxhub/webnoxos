@@ -32,7 +32,17 @@ check('set-password page has no links', !/<a\s/i.test(sp));
 const idx = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 check('index forwards invite/recovery links to set-password', idx.includes('/set-password.html'));
 
+const appHtml = fs.readFileSync(path.join(root, 'app.html'), 'utf8');
+const loginHtml = fs.readFileSync(path.join(root, 'login.html'), 'utf8');
+check('app.html never says "Master"', !/Master/.test(appHtml));
+check('login.html never says "Master"', !/Master/.test(loginHtml));
+check('login.html has no links', !/<a\s/i.test(loginHtml));
+check('app.html is noindex', appHtml.includes('noindex'));
+
 const js = fs.readFileSync(path.join(root, 'js', 'auth.js'), 'utf8');
+check('refusal sentence is defined exactly once and shared by both logins',
+  (js.match(/These details don't work here\./g) || []).length === 1 && /REFUSED/.test(js));
+check('both logins use the 600 ms failure floor', (js.match(/FLOOR_MS/g) || []).length >= 3);
 check('no console logging in auth.js', !/console\./.test(js));
 check('no localStorage use in auth.js', !/localStorage/.test(js));
 

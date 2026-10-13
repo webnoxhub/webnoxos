@@ -1,6 +1,9 @@
+// Local development server. On Vercel, public/** is served by the CDN and api/** runs as functions.
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import config from './api/config.js';
+import masterPing from './api/master/ping.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -8,16 +11,9 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 
-// Browser-safe config only. The secret key never leaves the server.
-app.get('/api/config', (_req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.json({
-    supabaseUrl: process.env.SUPABASE_URL || '',
-    supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || ''
-  });
-});
+app.get('/api/config', (req, res) => config(req, res));
+app.all('/api/master/ping', (req, res) => masterPing(req, res));
 
-// Local development only. On Vercel, public/** is served by the CDN.
 if (!process.env.VERCEL) {
   const pub = path.join(__dirname, 'public');
   app.get('/master-signin', (_req, res) => res.sendFile(path.join(pub, 'master-signin.html')));
