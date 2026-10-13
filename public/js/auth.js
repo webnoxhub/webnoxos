@@ -90,3 +90,75 @@ export async function initMasterLogin() {
     if (passwordOnly) { pass.focus(); } else { email.value = ''; email.focus(); }
   });
 }
+
+// ---------------------------------------------------------------------------
+// First-time password (invite link) and reset-link page.
+// ---------------------------------------------------------------------------
+export async function initSetPassword() {
+  const form = document.getElementById('spForm');
+  const pass = document.getElementById('spPass');
+  const pass2 = document.getElementById('spPass2');
+  const errorEl = document.getElementById('spError');
+  const okEl = document.getElementById('spOk');
+  const waitEl = document.getElementById('spWait');
+  const submit = document.getElementById('spSubmit');
+  const eye = document.getElementById('spEye');
+
+  const showError = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearError = () => { errorEl.textContent = ''; errorEl.hidden = true; };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  eye.addEventListener('click', () => {
+    const show = pass.type === 'password';
+    pass.type = show ? 'text' : 'password';
+    pass2.type = pass.type;
+    eye.setAttribute('aria-pressed', String(show));
+    eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  });
+
+  let sb;
+  try { sb = await getClient(); } catch { sb = null; }
+
+  // The link carries a one-time token; the client turns it into a session.
+  let session = null;
+  if (sb) {
+    for (let i = 0; i < 10 && !session; i++) {
+      try { const { data } = await sb.auth.getSession(); session = data && data.session; } catch { /* retry */ }
+      if (!session) await sleep(300);
+    }
+  }
+  waitEl.hidden = true;
+  if (!session) {
+    showError('This link has expired or was already used. Ask for a new one.');
+    return;
+  }
+  history.replaceState(null, '', location.pathname); // remove the token from the address bar
+  form.hidden = false;
+  pass.focus();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (submit.disabled) return;
+    clearError();
+    const a = pass.value, b = pass2.value;
+    if (a.length < 10) { showError('Use at least 10 characters.'); return; }
+    if (!/[A-Za-z]/.test(a) || !/[0-9]/.test(a)) { showError('Use letters and at least one number.'); return; }
+    if (a !== b) { showError('The two passwords do not match.'); return; }
+
+    submit.disabled = true; submit.classList.add('is-busy'); pass.disabled = true; pass2.disabled = true;
+    let saved = false;
+    try {
+      const { error } = await sb.auth.updateUser({ password: a });
+      saved = !error;
+    } catch { saved = false; }
+
+    if (saved) {
+      try { await sb.auth.signOut(); } catch { /* ignore */ }
+      form.hidden = true;
+      okEl.hidden = false;
+      return;
+    }
+    submit.disabled = false; submit.classList.remove('is-busy'); pass.disabled = false; pass2.disabled = false;
+    showError('Could not save that password. Try a different one.');
+  });
+}

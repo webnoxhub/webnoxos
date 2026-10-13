@@ -26,6 +26,12 @@ const visible = html.replace(/<script[\s\S]*?<\/script>/g, '');
 check('word "Master" appears exactly once in the page', (visible.match(/Master/g) || []).length === 1);
 check('page has no links', !/<a\s/i.test(html));
 
+const sp = fs.readFileSync(path.join(root, 'set-password.html'), 'utf8');
+check('set-password page is noindex', sp.includes('<meta name="robots" content="noindex, nofollow">'));
+check('set-password page has no links', !/<a\s/i.test(sp));
+const idx = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+check('index forwards invite/recovery links to set-password', idx.includes('/set-password.html'));
+
 const js = fs.readFileSync(path.join(root, 'js', 'auth.js'), 'utf8');
 check('no console logging in auth.js', !/console\./.test(js));
 check('no localStorage use in auth.js', !/localStorage/.test(js));

@@ -101,3 +101,9 @@
   .ml-spin{animation-duration:1.6s}
   .ml-submit,.ml-input{transition:none}
 }
+
+/* set-password page */
+.ml-hint{margin:-6px 0 16px;font:400 12px/1.4 Inter,system-ui,sans-serif;color:var(--m-muted)}
+.ml-ok{margin:0;font:500 14px/1.5 Inter,system-ui,sans-serif;color:#86EFAC}
+.ml-wait{margin:0;font:400 14px/1.5 Inter,system-ui,sans-serif;color:var(--m-ink-2)}
+.ml-ok[hidden],.ml-wait[hidden],.ml-form[hidden]{display:none}

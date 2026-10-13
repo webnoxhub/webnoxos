@@ -4,6 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Webnox OS</title>
+  <script>
+    // Supabase sends invite and reset links to the Site URL with the token in the
+    // address bar hash. Forward those, and only those, to the password page.
+    (function () {
+      var h = location.hash || '';
+      if (/type=(invite|recovery)/.test(h) || /error_code=/.test(h)) {
+        location.replace('/set-password.html' + h);
+      }
+    })();
+  </script>
   <style>
     body{margin:0;min-height:100dvh;display:grid;place-items:center;font:500 16px/1.4 system-ui,sans-serif;background:#F8FAFC;color:#0F172A}
   </style>
