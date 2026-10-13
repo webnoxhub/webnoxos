@@ -14,18 +14,20 @@
   <div class="bl-split">
 
     <aside class="bl-art">
-      <svg class="bl-mark" viewBox="0 0 64 40" role="img" aria-label="Webnox OS">
-        <defs><linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#0891B2"/><stop offset="1" stop-color="#6D28D9"/></linearGradient></defs>
-        <path d="M8 4l2.2 5.8L16 12l-5.8 2.2L8 20l-2.2-5.8L0 12l5.8-2.2z" fill="#0891B2"/>
-        <path d="M26 6h9l-9 28h-9zM42 6h9l-9 28h-9z" fill="url(#blg)"/>
-      </svg>
-      <h2 class="bl-art-title">One place for your whole business.</h2>
-      <ul class="bl-art-list">
-        <li>Tasks that track themselves</li>
-        <li>Leads that turn into clients</li>
-        <li>Invoices and money, always clear</li>
-      </ul>
+      <div class="bl-glow bl-glow-1" aria-hidden="true"></div>
+      <div class="bl-glow bl-glow-2" aria-hidden="true"></div>
+      <div class="bl-brand">
+        <span class="bl-badge" id="blBadge">WO</span>
+        <div><p class="bl-brand-name" id="blBrand">Webnox OS</p><p class="bl-brand-sub">Team workspace</p></div>
+      </div>
+      <h2 class="bl-art-title">Every task, every hour, one hub.</h2>
+      <p class="bl-art-text">Assign work by role, run timers on tasks and see who is active right now.</p>
+      <div class="bl-demo" aria-hidden="true">
+        <div class="bl-row"><span>Sales</span><div class="bl-track-bar"><i class="seg s1"></i><i class="seg s2"></i><i class="tm t1"></i></div></div>
+        <div class="bl-row"><span>Lead gen</span><div class="bl-track-bar"><i class="seg s3"></i><i class="seg s4"></i><i class="tm t2"></i></div></div>
+        <div class="bl-row"><span>Cold calls</span><div class="bl-track-bar"><i class="seg s5"></i><i class="seg s6"></i><i class="tm t3"></i></div></div>
+        <div class="bl-legend"><span><i class="k k-a"></i>Active</span><span><i class="k k-i"></i>Idle</span><span><i class="k k-t"></i>Task timer</span></div>
+      </div>
     </aside>
 
     <main class="bl-main">
@@ -67,6 +69,7 @@
     </main>
 
   </div>
+  <footer class="bl-foot">© 2026 Powered by Webnox OS. All rights reserved.</footer>
 
   <script type="module">
     import { initBusinessLogin } from '/js/auth.js';

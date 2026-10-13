@@ -1,3 +1,4 @@
+import { applyBrand } from '/js/brand.js';
 import { getClient } from '/js/supabase.js';
 import { isEmail, EMAIL_MSG } from '/js/validate.js';
 
@@ -136,18 +137,16 @@ export async function initSetPassword() {
   }
   history.replaceState(null, '', location.pathname); // remove the token from the address bar
 
-  // Whose workspace is this? Show its name; the Master keeps the dark look.
+  // Whose workspace is this? Show its name on the left panel.
   let slug = '';
   try {
     const { data: me } = await sb.from('profiles').select('is_master,workspace_id').eq('id', session.user.id).maybeSingle();
-    if (me && me.is_master) {
-      document.body.classList.remove('sp-light');
-      document.getElementById('spFoot').hidden = true;
-    } else if (me && me.workspace_id) {
+    if (me && !me.is_master && me.workspace_id) {
       const { data: w } = await sb.from('workspaces').select('name,slug').eq('id', me.workspace_id).maybeSingle();
       if (w) {
-        document.getElementById('spBrand').textContent = w.name;
+        applyBrand(w.name);
         document.getElementById('spTier').textContent = 'Welcome aboard';
+        document.getElementById('spSub').textContent = 'Create a password to get started.';
         document.title = 'Set your password · ' + w.name;
         slug = w.slug || '';
       }
@@ -210,7 +209,7 @@ export async function initBusinessLogin() {
   if (/^[a-z0-9-]{1,40}$/.test(wslug)) {
     fetch('/api/public/workspace-brand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: wslug }) })
       .then((r) => r.json()).then((b) => {
-        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = 'Sign in to ' + b.name; document.title = 'Sign in · ' + b.name; }
+        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = 'Sign in to ' + b.name; document.title = 'Sign in · ' + b.name; applyBrand(b.name); }
       }).catch(() => { /* plain sign-in page */ });
   }
 

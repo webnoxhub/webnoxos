@@ -113,6 +113,7 @@ function mountShell(sb, prof, cfg) {
           '</div>' +
         '</header>' +
         '<main class="view" id="view" tabindex="-1"></main>' +
+        '<footer class="app-foot">© 2026 Powered by Webnox OS. All rights reserved.</footer>' +
       '</div>' +
     '</div>';
 
