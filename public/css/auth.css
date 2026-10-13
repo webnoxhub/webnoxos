@@ -185,7 +185,11 @@
 .bl-wait[hidden],#spForm[hidden],.bl-ok[hidden],#spGo[hidden]{display:none}
 .bl-hint{margin:-6px 0 16px;font-size:12px;color:#64748B}
 .bl-ok{margin:0 0 16px;font-weight:500;color:#15803D}
-.bl-foot{position:fixed;left:0;right:0;bottom:0;padding:12px 16px;text-align:center;font-size:12px;color:#64748B;z-index:5;pointer-events:none}
+.bl-foot{position:fixed;right:0;bottom:0;width:45%;box-sizing:border-box;padding:14px 16px;text-align:center;font-size:12px;color:#64748B;background:#fff;z-index:5;pointer-events:none}
+@media (max-width:899px){.bl-foot{width:100%}}
+.bl-badge.has-logo{background:transparent;width:auto;height:48px}
+.bl-logo[hidden],#blInit[hidden]{display:none}
+.bl-logo{display:block;height:48px;width:auto;max-width:160px;object-fit:contain}
 .bl-main{padding-bottom:56px}
 @media (max-width:899px){
   .bl-demo,.bl-art-text{display:none}
