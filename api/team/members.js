@@ -6,7 +6,7 @@
 import { requireTeamManager } from '../../lib/team-guard.js';
 import { send } from '../../lib/master-guard.js';
 import { makeLink, readJson, siteUrl } from '../../lib/invites.js';
-import { canManage, canAssignType, checkMember } from '../../lib/team-rules.js';
+import { canManage, canAssignType, checkMember, checkLogo } from '../../lib/team-rules.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -22,6 +22,7 @@ export const makeHandler = (guard) => async function handler(req, res) {
   const activeRoles = (rr || []).map((r) => r.role_key);
 
   if (req.method === 'GET' && !id) return list(admin, workspace, me, activeRoles, res);
+  if (req.method === 'POST' && !id && url.searchParams.get('action') === 'logo') return setLogo(admin, me, workspace, req, res);
   if (req.method === 'POST' && !id) return create(admin, workspace, me, activeRoles, req, res);
 
   if (!id || !UUID.test(id)) return send(res, 400, { error: 'Invalid person' });
@@ -131,4 +132,14 @@ async function remove(admin, me, target, req, res) {
   const r2 = await admin.auth.admin.deleteUser(target.id);
   if (r2.error) return send(res, 502, { error: r2.error.message });
   send(res, 200, { ok: true });
+}
+
+async function setLogo(admin, me, ws, req, res) {
+  if (me.account_type !== 'admin') return send(res, 403, { error: 'Only the Admin can change the logo' });
+  let body; try { body = await readJson(req); } catch { return send(res, 400, { error: 'Invalid JSON body' }); }
+  const { error, value } = checkLogo(body.logo);
+  if (error) return send(res, 400, { error });
+  const { error: e } = await admin.from('workspaces').update({ logo_url: value }).eq('id', ws.id);
+  if (e) return send(res, 502, { error: e.message });
+  send(res, 200, { ok: true, logo_url: value });
 }

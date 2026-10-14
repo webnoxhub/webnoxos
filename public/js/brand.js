@@ -1,7 +1,9 @@
 // Fills the branded left panel of the business sign-in and set-password pages.
-export function applyBrand(name) {
+export function applyBrand(name, logo) {
   const n = String(name || '').trim();
   if (!n) return;
+  const lg = document.getElementById('blLogo');
+  if (lg && typeof logo === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(logo)) lg.src = logo;
   const b = document.getElementById('blBrand'); if (b) b.textContent = n;
   const bd = document.getElementById('blInit');
   if (bd) {

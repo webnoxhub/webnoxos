@@ -1,5 +1,5 @@
 // Team rules + the Admin/Manager guard + the handler's workspace isolation (fake Supabase).
-import { canManage, canAssignType, checkMember } from '../lib/team-rules.js';
+import { canManage, canAssignType, checkMember, checkLogo } from '../lib/team-rules.js';
 import { makeTeamGuard } from '../lib/team-guard.js';
 
 let failed = 0;
@@ -39,6 +39,12 @@ r = checkMember({ reports_to: 'not-an-id' }, active, { create: false });
 ok('garbage manager id refused', r.errors.length === 1);
 r = checkMember({ reports_to: '' }, active, { create: false });
 ok('empty manager id clears it', r.errors.length === 0 && r.value.reports_to === null);
+
+// --- workspace logo
+ok('png data url accepted', checkLogo('data:image/png;base64,iVBORw0KGgo=').error === null);
+ok('empty logo clears it', checkLogo('').value === null && checkLogo(null).error === null);
+ok('svg / script / other types refused', !!checkLogo('data:image/svg+xml;base64,PHN2Zz4=').error && !!checkLogo('javascript:alert(1)').error);
+ok('huge logo refused', !!checkLogo('data:image/png;base64,' + 'A'.repeat(210000)).error);
 
 // --- guard
 const tokens = {

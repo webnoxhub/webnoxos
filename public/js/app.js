@@ -58,13 +58,13 @@ function fail(msg) {
 // ---------------------------------------------------------------------------
 async function memberWorld(sb, prof) {
   if (!prof.workspace_id) return leave(sb, 'noprofile');
-  const { data: ws } = await sb.from('workspaces').select('name,status').eq('id', prof.workspace_id).maybeSingle();
+  const { data: ws } = await sb.from('workspaces').select('name,status,logo_url').eq('id', prof.workspace_id).maybeSingle();
   if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   document.getElementById('boot').remove();
   const pill = { admin: 'Admin', manager: 'Manager' }[prof.account_type] || 'Member';
   const nav = MEMBER_NAV.filter((n) => !n.boss || ['admin', 'manager'].includes(prof.account_type));
-  mountShell(sb, prof, { bell: true, nav, home: '/home', brand: ws.name, pill, suffix: ws.name, ws });
+  mountShell(sb, prof, { bell: true, nav, home: '/home', brand: ws.name, pill, suffix: ws.name, ws, logo: ws.logo_url || '', admin: prof.account_type === 'admin' });
 }
 
 // ---------------------------------------------------------------------------
@@ -74,8 +74,14 @@ async function masterWorld(sb, prof) {
   await loadCss('/css/master.css');
   document.body.dataset.world = 'master';
   document.getElementById('boot').remove();
-  mountShell(sb, prof, { nav: NAV, home: '/master', brand: 'Webnox OS', pill: 'Master', suffix: 'Webnox OS' });
+  mountShell(sb, prof, { nav: NAV, home: '/master', brand: 'Webnox OS', pill: 'Master', suffix: 'Webnox OS', logo: '' });
 }
+
+const MARK = '<svg class="sb-mark" viewBox="0 0 64 40" aria-hidden="true"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">' +
+  '<stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs>' +
+  '<path d="M8 4l2.2 5.8L16 12l-5.8 2.2L8 20l-2.2-5.8L0 12l5.8-2.2z" fill="#22D3EE"/>' +
+  '<path d="M26 6h9l-9 28h-9zM42 6h9l-9 28h-9z" fill="url(#g1)"/></svg>';
+const logoHtml = (src) => src ? '<img class="sb-img" alt="" src="' + esc(src) + '">' : MARK;
 
 // The shared shell: sidebar, top bar, avatar menu and the hash router.
 function mountShell(sb, prof, cfg) {
@@ -85,11 +91,9 @@ function mountShell(sb, prof, cfg) {
     '<div class="shell" id="shell">' +
       '<aside class="sb" id="sb" aria-label="Main">' +
         '<div class="sb-head">' +
-          '<svg class="sb-mark" viewBox="0 0 64 40" aria-hidden="true"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">' +
-          '<stop offset="0" stop-color="#22D3EE"/><stop offset="1" stop-color="#8B5CF6"/></linearGradient></defs>' +
-          '<path d="M8 4l2.2 5.8L16 12l-5.8 2.2L8 20l-2.2-5.8L0 12l5.8-2.2z" fill="#22D3EE"/>' +
-          '<path d="M26 6h9l-9 28h-9zM42 6h9l-9 28h-9z" fill="url(#g1)"/></svg>' +
-          '<div class="sb-title"><p class="sb-brand">' + esc(cfg.brand) + '</p><span class="pill">' + esc(cfg.pill) + '</span></div>' +
+          '<div class="sb-logo" id="sbLogo">' + logoHtml(cfg.logo) + '</div>' +
+          '<div class="sb-title"><p class="sb-name">' + esc(prof.name || prof.email || '') + '</p>' +
+          '<p class="sb-role">' + esc(cfg.pill) + ' of ' + esc(cfg.brand) + '</p></div>' +
         '</div>' +
         '<nav class="sb-nav" id="nav">' + NAV_.map((n) => n.page
           ? '<a class="nav-item" href="#' + n.path + '" data-path="' + n.path + '">' + icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span></a>'
@@ -108,6 +112,7 @@ function mountShell(sb, prof, cfg) {
             '<button class="avatar" id="avatar" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">' + esc(initials) + '</button>' +
             '<div class="menu" id="avatarMenu" hidden>' +
               '<p class="menu-name">' + esc(prof.name || '') + '</p><p class="menu-mail">' + esc(prof.email || '') + '</p>' +
+              (cfg.admin ? '<button class="menu-item" id="chLogo" type="button">' + icon('image', 16) + ' Workspace logo</button>' : '') +
               '<button class="menu-item" id="signout" type="button">' + icon('logout', 16) + ' Sign out</button>' +
             '</div>' +
           '</div>' +
@@ -141,6 +146,14 @@ function mountShell(sb, prof, cfg) {
   document.addEventListener('click', () => setMenu(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenu(false); closeNav(); } });
   document.getElementById('signout').addEventListener('click', () => signOut(sb));
+  const chLogo = document.getElementById('chLogo');
+  if (chLogo) chLogo.addEventListener('click', () => {
+    setMenu(false);
+    import('/js/logo-upload.js').then((m) => m.openLogoModal(sb, cfg.logo, (logo) => {
+      cfg.logo = logo || '';
+      document.getElementById('sbLogo').innerHTML = logoHtml(cfg.logo);
+    }));
+  });
 
   if (cfg.bell) import('/js/notify.js').then((m) => m.mountBell(sb, document.getElementById('bellWrap'))).catch(() => {});
 
