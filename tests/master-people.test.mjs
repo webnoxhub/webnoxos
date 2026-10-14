@@ -79,5 +79,23 @@ ok('the Master account itself is not editable here', x.status === 404);
 x = await call('GET', `/api/master/workspace?id=${wsA}`, 't_master');
 ok('the team list shows full emails to the Master', x.status === 200 && x.json.team.some((t) => t.email === 'renamed@x.com'));
 
+// delete
+const D = (id, t, confirm) => call('DELETE', URL_(wsA, `&user_id=${id}`), t, { confirm });
+x = await D(newId, 't_admin', 'Renamed Admin');
+ok('a workspace Admin cannot use the Master delete', x.status === 403);
+x = await D(newId, 't_master', 'wrong');
+ok('wrong name typed is refused', x.status === 400);
+x = await D(adminB, 't_master', 'Bela');
+ok('cannot delete someone of another workspace through this one', x.status === 404);
+await db.query(`update profiles set status='inactive' where id='${newId}'`);
+x = await D(adminA, 't_master', 'Amir');
+ok('the only active Admin cannot be deleted', x.status === 409, JSON.stringify(x));
+await db.query(`update profiles set status='active', account_type='admin' where id='${newId}'`);
+x = await D(mem, 't_master', ' mem ');
+ok('Master deletes a member (name is case-insensitive)', x.status === 200);
+ok('his sign-in and profile are gone', (await one(`select count(*)::int n from auth.users where id='${mem}'`)).n === 0 && (await one(`select count(*)::int n from profiles where id='${mem}'`)).n === 0);
+x = await D(adminA, 't_master', 'Amir');
+ok('an Admin can be deleted while another stays', x.status === 200 && (await one(`select count(*)::int n from profiles where id='${adminA}'`)).n === 0);
+
 console.log(failed ? `\n${failed} FAILED` : '\nMaster people checks passed');
 process.exit(failed ? 1 : 0);

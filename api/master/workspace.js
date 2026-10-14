@@ -3,6 +3,7 @@
 //   PATCH /api/master/workspace?id=<uuid>   { name?, status?, roles?: [{role,edit}] }
 //   POST  /api/master/workspace?id=<uuid>&action=link   { user_id, send?: boolean }
 //   POST  /api/master/workspace?id=<uuid>&action=person  { name, email, account_type: 'admin'|'manager' }  add an Admin or Manager
+//   DELETE /api/master/workspace?id=<uuid>&action=person&user_id=<uuid>  { confirm: <typed name> }  permanent delete
 //   PATCH /api/master/workspace?id=<uuid>&action=person&user_id=<uuid>  { name?, email?, account_type?, status? }  edit one
 import { requireMaster, send } from '../../lib/master-guard.js';
 import { isEmail } from '../../lib/validate.js';
@@ -29,6 +30,7 @@ export const makeHandler = (masterGuard) => async function handler(req, res) {
   if (req.method === 'GET')   return details(admin, ws, res);
   const action = url.searchParams.get('action');
   if (req.method === 'PATCH' && action === 'person') return editPerson(admin, ws, url.searchParams.get('user_id') || '', req, res);
+  if (req.method === 'DELETE' && action === 'person') return deletePerson(admin, ws, url.searchParams.get('user_id') || '', req, res);
   if (req.method === 'PATCH') return update(admin, ws, req, res);
   if (req.method === 'DELETE') return purge(admin, ws, req, res);
   if (req.method === 'POST' && action === 'link') return regenerate(admin, ws, req, res);
@@ -195,5 +197,25 @@ async function editPerson(admin, ws, userId, req, res) {
   const { error } = await admin.from('profiles').update(patch).eq('id', p.id).eq('workspace_id', ws.id);
   if (error) return send(res, 502, { error: error.message });
   if (patch.status === 'inactive') await admin.rpc('close_member_sessions', { p_member: p.id });
+  send(res, 200, { ok: true });
+}
+
+// Permanent delete of one person. The Master types the name to confirm; the last active Admin cannot be deleted.
+async function deletePerson(admin, ws, userId, req, res) {
+  if (!UUID.test(userId)) return send(res, 400, { error: 'Invalid user' });
+  let body = {}; try { body = await readJson(req); } catch { /* empty is fine */ }
+  const { data: p } = await admin.from('profiles').select('id,email,name,account_type,status,workspace_id,is_master').eq('id', userId).maybeSingle();
+  if (!p || p.workspace_id !== ws.id || p.is_master) return send(res, 404, { error: 'Person not found in this workspace' });
+  const want = String(p.name || p.email || '').trim().toLowerCase();
+  if (!want || String(body.confirm || '').trim().toLowerCase() !== want) return send(res, 400, { error: 'The name you typed does not match' });
+  if (p.account_type === 'admin' && p.status === 'active') {
+    const { data: all } = await admin.from('profiles').select('id,account_type,status').eq('workspace_id', ws.id);
+    if (!(all || []).some((x) => x.id !== p.id && x.account_type === 'admin' && x.status === 'active'))
+      return send(res, 409, { error: 'This is the only active Admin. Add another Admin first.' });
+  }
+  const r1 = await admin.rpc('purge_person_activity', { p_id: p.id });
+  if (r1.error) return send(res, 502, { error: r1.error.message });
+  const r2 = await admin.auth.admin.deleteUser(p.id);
+  if (r2.error) return send(res, 502, { error: r2.error.message });
   send(res, 200, { ok: true });
 }

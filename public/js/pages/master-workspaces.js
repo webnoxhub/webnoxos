@@ -574,6 +574,7 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
           '<span class="chip chip-' + (p.status === 'inactive' ? 'muted' : p.pending ? 'warn' : 'ok') + '">' + (p.status === 'inactive' ? 'Inactive' : p.pending ? 'Invite pending' : 'Active') + '</span>' +
           (p.account_type !== 'member' ? '<button class="btn btn-sm btn-ghost" type="button" data-edit="' + esc(p.id) + '">Edit</button>' : '') +
           '<button class="btn btn-sm btn-ghost" type="button" data-regen="' + esc(p.id) + '">Regenerate link</button>' +
+          '<button class="btn btn-sm btn-danger" type="button" data-del="' + esc(p.id) + '">Delete</button>' +
           '<div class="team-link" hidden></div>' +
         '</div>').join('') : '<p class="muted small">No people yet.</p>') +
     '</div>' +
@@ -609,6 +610,20 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
   body.querySelector('#addPerson').addEventListener('click', () => openPersonModal({ sb, id, ws, person: null, team: d.team, onDone: reopen }));
   body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () =>
     openPersonModal({ sb, id, ws, person: d.team.find((x) => x.id === b.dataset.edit), team: d.team, onDone: reopen })));
+
+  body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
+    const p = d.team.find((x) => x.id === b.dataset.del); if (!p) return;
+    const nm = p.name || p.email;
+    confirmByName({
+      title: 'Delete ' + nm + ' permanently', name: nm,
+      warning: 'This removes <strong>' + esc(nm) + '</strong> from <strong>' + esc(ws.name) + '</strong>: their sign-in, comments, requests, place in projects and every activity line about them. This cannot be undone.',
+      onConfirm: async (typed) => {
+        await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=person&user_id=' + encodeURIComponent(p.id),
+          { method: 'DELETE', body: JSON.stringify({ confirm: typed }) });
+        reopen();
+      },
+    });
+  }));
 
   const onHold = ws.status === 'suspended';
   foot.innerHTML = '<span class="foot-left"><button class="btn btn-sm btn-ghost" id="panelHold" type="button">' + (onHold ? 'Resume workspace' : 'Put on hold') + '</button>' +
