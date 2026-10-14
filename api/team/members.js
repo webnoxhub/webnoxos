@@ -41,7 +41,7 @@ export default makeHandler(requireTeamManager);
 
 async function list(admin, ws, me, activeRoles, res) {
   const { data, error } = await admin.from('profiles')
-    .select('id,name,email,phone,joining_date,department,job_title,account_type,status,roles,reports_to,last_seen_at')
+    .select('id,name,email,phone,joining_date,department,job_title,account_type,status,roles,reports_to,last_seen_at,avatar_url')
     .eq('workspace_id', ws.id).eq('is_master', false).order('created_at', { ascending: true });
   if (error) return send(res, 502, { error: error.message });
   const people = [];
@@ -141,7 +141,8 @@ async function setLogo(admin, me, ws, req, res) {
   let body; try { body = await readJson(req); } catch { return send(res, 400, { error: 'Invalid JSON body' }); }
   const { error, value } = checkLogo(body.logo);
   if (error) return send(res, 400, { error });
-  const { error: e } = await admin.from('workspaces').update({ logo_url: value }).eq('id', ws.id);
+  const logo_only = value ? body.logo_only === true : false;   // only a logo can stand alone
+  const { error: e } = await admin.from('workspaces').update({ logo_url: value, logo_only }).eq('id', ws.id);
   if (e) return send(res, 502, { error: e.message });
-  send(res, 200, { ok: true, logo_url: value });
+  send(res, 200, { ok: true, logo_url: value, logo_only });
 }

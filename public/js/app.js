@@ -49,7 +49,7 @@ function fail(msg) {
 // ---------------------------------------------------------------------------
 async function memberWorld(sb, prof) {
   if (!prof.workspace_id) return leave(sb, 'noprofile');
-  const { data: ws } = await sb.from('workspaces').select('id,name,slug,status,logo_url').eq('id', prof.workspace_id).maybeSingle();
+  const { data: ws } = await sb.from('workspaces').select('id,name,slug,status,logo_url,logo_only').eq('id', prof.workspace_id).maybeSingle();
   if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   // The workspace app has its own look: swap the Webnox stylesheet for the workspace one.

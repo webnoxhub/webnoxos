@@ -142,9 +142,9 @@ export async function initSetPassword() {
   try {
     const { data: me } = await sb.from('profiles').select('is_master,workspace_id').eq('id', session.user.id).maybeSingle();
     if (me && !me.is_master && me.workspace_id) {
-      const { data: w } = await sb.from('workspaces').select('name,slug,logo_url').eq('id', me.workspace_id).maybeSingle();
+      const { data: w } = await sb.from('workspaces').select('name,slug,logo_url,logo_only').eq('id', me.workspace_id).maybeSingle();
       if (w) {
-        applyBrand(w.name, w.logo_url);
+        applyBrand(w.name, w.logo_url, w.logo_only);
         document.getElementById('spTier').textContent = 'Welcome aboard';
         document.getElementById('spSub').textContent = 'Create a password to get started.';
         document.title = 'Set your password · ' + w.name;
@@ -209,7 +209,7 @@ export async function initBusinessLogin() {
   if (/^[a-z0-9-]{1,40}$/.test(wslug)) {
     fetch('/api/public/workspace-brand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: wslug }) })
       .then((r) => r.json()).then((b) => {
-        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = 'Sign in to ' + b.name; document.title = 'Sign in · ' + b.name; applyBrand(b.name, b.logo_url); }
+        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = (b.logo_only ? 'Sign in' : 'Sign in to ' + b.name); document.title = 'Sign in · ' + b.name; applyBrand(b.name, b.logo_url, b.logo_only); }
       }).catch(() => { /* plain sign-in page */ });
   }
 

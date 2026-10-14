@@ -16,8 +16,8 @@ export default async function handler(req, res) {
       const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_SECRET_KEY;
       if (typeof slug === 'string' && SLUG.test(slug) && url && key) {
         const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-        const { data } = await admin.from('workspaces').select('name,slug,status,logo_url').eq('slug', slug).maybeSingle();
-        if (data && (data.status === 'trial' || data.status === 'active')) out = { name: data.name, slug: data.slug, logo_url: data.logo_url || null };
+        const { data } = await admin.from('workspaces').select('name,slug,status,logo_url,logo_only').eq('slug', slug).maybeSingle();
+        if (data && (data.status === 'trial' || data.status === 'active')) out = { name: data.name, slug: data.slug, logo_url: data.logo_url || null, logo_only: !!(data.logo_url && data.logo_only) };
       }
     }
   } catch { out = {}; }

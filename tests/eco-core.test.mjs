@@ -67,12 +67,19 @@ const pr = (await q(`select first_name, last_name, role, employee_code from prof
 ok(pr.first_name === 'Ali' && pr.last_name === 'Khan' && pr.role === 'member', 'first_name / last_name / role are derived from the Webnox profile');
 ok((await q(`select role from profiles where id=$1`, [A]))[0].role === 'admin', 'admin account has role admin');
 ok((await q(`select role from profiles where id=$1`, [MG]))[0].role === 'member', 'manager account is a member for the EcomHub screens');
-ok((await q(`select employee_code from profiles where id=$1`, [A]))[0].employee_code === 'EMP-0001'
-   && (await q(`select employee_code from profiles where id=$1`, [B]))[0].employee_code === 'EMP-0001', 'employee codes count inside each workspace');
+ok((await q(`select employee_code from profiles where id=$1`, [A]))[0].employee_code === 'EMP-ALPHA-001'
+   && (await q(`select employee_code from profiles where id=$1`, [B]))[0].employee_code === 'EMP-BETA-001', 'employee codes count inside each workspace');
 ok((await q(`select employee_code from profiles where id=$1`, [MASTER]))[0].employee_code === null, 'a Master gets no employee code');
 const mr = (await q(`select role_key from member_roles where member_id=$1 order by 1`, [M1])).map(r => r.role_key).join();
 ok(mr === 'cold_caller,lead_gen', 'member_roles lists the roles a person holds');
 ok((await q(`select role_key from member_roles where member_id=$1`, [MG])).some(r => r.role_key === 'manager'), 'a Manager account holds the manager role');
+
+const late = await person('late@alpha.com', 'Late Joiner', W1, 'member');
+ok((await q(`select employee_code from profiles where id=$1`, [late]))[0].employee_code === 'EMP-ALPHA-005', 'the next person in a workspace gets the next number with the slug');
+const codes = (await q(`select employee_code from profiles where workspace_id=$1`, [W1])).map(r => r.employee_code);
+ok(new Set(codes).size === codes.length && codes.every(c => /^EMP-ALPHA-\d{3}$/.test(c)), 'every code in the workspace is unique and has the slug');
+await ex(`delete from auth.users where id='${late}'`);
+ok((await q(`select count(*)::int c from workspaces where logo_only`))[0].c === 0, 'logo_only is off by default');
 
 console.log('Tasks (admin)');
 const [t1] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role, priority, due_date) values ('Call 50 leads', $1, 'cold_caller', 'high', current_date - 1) returning id, created_by, status, workspace_id`, [M1]));

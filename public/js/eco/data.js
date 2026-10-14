@@ -46,7 +46,7 @@ export const TASK_FIELDS = 'id, title, description, status, priority, team_role,
 
 export async function loadMembers({ includeAdmin = false } = {}) {
   let query = supabase.from('profiles')
-    .select('id, employee_code, name, first_name, last_name, email, phone, department, job_title, role, account_type, status, joined_on, created_at, roles, reports_to')
+    .select('id, employee_code, name, first_name, last_name, email, phone, department, job_title, role, account_type, status, joined_on, created_at, roles, reports_to, avatar_url')
     .order('first_name');
   if (!includeAdmin) query = query.eq('role', 'member');
   const rows = await q(query);

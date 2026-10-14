@@ -12,8 +12,14 @@ export async function render({ el }) {
   if (!zones.includes(s.timezone)) zones.unshift(s.timezone);
 
   el.innerHTML = `
-    <div class="page-head"><div><h1>Settings</h1><p>Workspace settings.</p></div></div>
+    <div class="page-head"><div><h1>Settings</h1><p>${esc(state.workspace?.name || s.company_name)} Workspace · company details, logo, timezone and tracking.</p></div></div>
     <div class="stack" style="max-width:820px">
+      <section class="panel">
+        <div class="panel-head"><div><h2>Workspace logo</h2><p>Shown in the sidebar and on your team's sign-in page.</p></div>
+          <button class="btn" id="chLogo" type="button">Change logo</button></div>
+        <div class="panel-body"><div class="logo-prev" id="stLogo"></div>
+          <p class="muted small" id="stLogoNote" style="margin-top:8px"></p></div>
+      </section>
       <section class="panel">
         <div class="panel-head"><div><h2>Workspace</h2><p>Changes are recorded in the activity log.</p></div></div>
         <div class="panel-body">
@@ -32,6 +38,22 @@ export async function render({ el }) {
         </div>
       </section>
     </div>`;
+
+  const paintLogo = () => {
+    const w = state.workspace || {};
+    el.querySelector('#stLogo').innerHTML = w.logo_url ? `<img alt="" src="${esc(w.logo_url)}">` : '<span>No logo yet</span>';
+    el.querySelector('#stLogoNote').textContent = w.logo_url ? (w.logo_only ? 'Logo only: the business name is not shown as text.' : 'The business name is shown next to the logo.') : '';
+  };
+  paintLogo();
+  el.querySelector('#chLogo').addEventListener('click', () => {
+    import('../logo.js').then((m) => m.openLogoModal({ current: state.workspace.logo_url || '', logoOnly: !!state.workspace.logo_only }, (logo, only) => {
+      state.workspace.logo_url = logo || ''; state.workspace.logo_only = !!only;
+      const box = document.getElementById('brandLogo'); if (box) box.innerHTML = logo ? `<img class="brand-logo" alt="" src="${esc(logo)}">` : box.dataset.mark || '';
+      document.querySelectorAll('.brand-name small').forEach((n) => { n.textContent = `${state.profile.account_type === 'admin' ? 'Admin' : 'Manager'}${only && logo ? '' : ' of ' + state.workspace.name}`; });
+      paintLogo();
+      if (!logo) location.reload();
+    }));
+  });
 
   const form = el.querySelector('#ws');
   form.addEventListener('submit', (e) => {

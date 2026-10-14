@@ -1970,3 +1970,28 @@ grant execute on function public.task_force_delete(bigint) to authenticated;
 -- The API still refuses to switch off or demote the last active Admin.
 -- =============================================================================
 drop index if exists public.one_admin_per_workspace;
+
+-- =============================================================================
+-- PART 12 — Employee IDs carry the workspace slug (EMP-WEBNOX-001); logo-only branding
+-- =============================================================================
+create or replace function public.profiles_employee_code() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.employee_code is null and new.workspace_id is not null and not new.is_master then
+    perform pg_advisory_xact_lock(hashtext(new.workspace_id::text));
+    new.employee_code := 'EMP-' || upper((select slug from public.workspaces where id = new.workspace_id)) || '-' ||
+      lpad((select coalesce(max(substring(p.employee_code from '([0-9]+)$')::int), 0) + 1
+              from public.profiles p
+             where p.workspace_id = new.workspace_id and p.employee_code ~ '^EMP-.+-[0-9]+$')::text, 3, '0');
+  end if;
+  return new;
+end $$;
+
+-- Existing people: EMP-0001 becomes EMP-<SLUG>-001 (same order, same numbers).
+update public.profiles p
+   set employee_code = 'EMP-' || upper(w.slug) || '-' || lpad(substring(p.employee_code from 5)::int::text, 3, '0')
+  from public.workspaces w
+ where w.id = p.workspace_id and p.employee_code ~ '^EMP-[0-9]+$';
+
+-- A logo that already contains the business name: show only the logo, never the name as text.
+alter table public.workspaces add column if not exists logo_only boolean not null default false;

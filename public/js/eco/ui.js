@@ -98,7 +98,8 @@ export function fullName(p) {
   return `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email || 'Member';
 }
 export function avatar(p, size = '') {
-  return `<span class="avatar ${size}" aria-hidden="true">${esc(initials(p))}</span>`;
+  const pic = typeof p?.avatar_url === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(p.avatar_url) ? p.avatar_url : '';
+  return `<span class="avatar ${size}${pic ? ' has-pic' : ''}" aria-hidden="true">${pic ? `<img alt="" src="${pic}">` : esc(initials(p))}</span>`;
 }
 export function who(p, sub = '') {
   return `<div class="who">${avatar(p)}<div><div class="name">${esc(fullName(p))}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div></div>`;

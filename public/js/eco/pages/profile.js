@@ -37,15 +37,54 @@ export async function render({ el }) {
   mountPasswordForm(el.querySelector('#pw'));
 }
 
+// Centre-crop to a 192px square JPEG so the picture stays small.
+function squarePic(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file); const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.width, img.height), c = document.createElement('canvas'); c.width = c.height = 192;
+      c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 192, 192);
+      URL.revokeObjectURL(url); resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not an image.')); };
+    img.src = url;
+  });
+}
+
 export function mountProfileForm(box) {
   const p = state.profile;
   box.innerHTML = `
     <form class="form-grid" novalidate>
+      <div class="field span-2"><label>Profile picture</label>
+        <div class="row" style="gap:14px"><span id="pf-pic">${avatar(p, 'lg')}</span>
+          <button class="btn btn-sm" type="button" id="pf-pick">Change picture</button>
+          ${p.avatar_url ? '<button class="btn btn-sm btn-ghost" type="button" id="pf-clear">Remove</button>' : ''}
+          <input type="file" id="pf-file" accept="image/png,image/jpeg,image/webp" hidden></div>
+        <span class="hint">A square photo works best. It shows in the sidebar, on tasks and in the team list.</span></div>
       <div class="field"><label for="pf-name">Full name</label><input id="pf-name" class="input" value="${esc(p.name || '')}" maxlength="80"></div>
       <div class="field"><label for="pf-email">Email</label><input id="pf-email" class="input" value="${esc(p.email)}" disabled></div>
       <div class="field"><label for="pf-phone">Phone</label><input id="pf-phone" class="input" value="${esc(p.phone || '')}" maxlength="20"></div>
       <div class="span-2"><button class="btn btn-primary" type="submit">Save details</button></div>
     </form>`;
+  const savePic = async (avatarData) => {
+    try {
+      await api('/me', { method: 'POST', body: { avatar: avatarData } });
+      state.profile.avatar_url = avatarData;
+      document.querySelectorAll('.sidebar-foot .avatar, .pmenu-btn .avatar, .pmenu-head .avatar, #pf-pic .avatar').forEach((n) => {
+        const big = n.classList.contains('lg');
+        n.outerHTML = avatar(state.profile, big ? 'lg' : '');
+      });
+      toast(avatarData ? 'Picture saved' : 'Picture removed');
+      if (!avatarData) box.querySelector('#pf-clear')?.remove();
+      else if (!box.querySelector('#pf-clear')) { const b = document.createElement('button'); b.className = 'btn btn-sm btn-ghost'; b.type = 'button'; b.id = 'pf-clear'; b.textContent = 'Remove'; b.onclick = () => savePic(null); box.querySelector('#pf-pick').after(b); }
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  box.querySelector('#pf-pick').addEventListener('click', () => box.querySelector('#pf-file').click());
+  box.querySelector('#pf-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { await savePic(await squarePic(f)); } catch (err) { toast(err.message, 'error'); }
+  });
+  box.querySelector('#pf-clear')?.addEventListener('click', () => savePic(null));
   const form = box.querySelector('form');
   form.addEventListener('submit', (e) => {
     e.preventDefault();

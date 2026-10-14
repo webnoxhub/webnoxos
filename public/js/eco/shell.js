@@ -105,7 +105,11 @@ export async function start({ profile: boot, workspace }) {
 }
 
 const loginUrl = () => '/login.html' + (state.workspace?.slug ? '?w=' + encodeURIComponent(state.workspace.slug) : '');
-const roleLine = () => `${PILL[state.profile.account_type] || 'Member'} of ${state.workspace.name}`;
+const roleLine = () => {
+  const role = PILL[state.profile.account_type] || 'Member';
+  // A logo that already carries the business name stands alone: no workspace name as text.
+  return state.workspace.logo_only && state.workspace.logo_url ? role : `${role} of ${state.workspace.name}`;
+};
 
 function navItems() {
   const keep = (n) => READY.has(n.page);
@@ -207,8 +211,9 @@ function renderShell() {
     const lg = pmenu.querySelector('[data-logo]');
     if (lg) lg.onclick = () => {
       closeMenu();
-      import('./logo.js').then((m) => m.openLogoModal(state.workspace.logo_url || '', (logo) => {
-        state.workspace.logo_url = logo || '';
+      import('./logo.js').then((m) => m.openLogoModal({ current: state.workspace.logo_url || '', logoOnly: !!state.workspace.logo_only }, (logo, logoOnly) => {
+        state.workspace.logo_url = logo || ''; state.workspace.logo_only = !!logoOnly;
+        document.querySelectorAll('.brand-name small, .pmenu-head .sub').forEach((n) => { n.textContent = roleLine(); });
         document.getElementById('brandLogo').innerHTML = logoHtml(state.workspace.logo_url);
       }));
     };

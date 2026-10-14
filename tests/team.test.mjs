@@ -1,5 +1,5 @@
 // Team rules + the Admin/Manager guard + the handler's workspace isolation (fake Supabase).
-import { canManage, canAssignType, checkMember, checkLogo, checkSelf } from '../lib/team-rules.js';
+import { canManage, canAssignType, checkMember, checkLogo, checkSelf, checkAvatar } from '../lib/team-rules.js';
 import { makeTeamGuard } from '../lib/team-guard.js';
 
 let failed = 0;
@@ -42,6 +42,10 @@ ok('empty manager id clears it', r.errors.length === 0 && r.value.reports_to ===
 
 // --- workspace logo
 ok('png data url accepted', checkLogo('data:image/png;base64,iVBORw0KGgo=').error === null);
+ok('a small jpeg picture is accepted', checkAvatar('data:image/jpeg;base64,AAAA').error === null);
+ok('a picture can be removed', checkAvatar(null).value === null);
+ok('a script is not a picture', checkAvatar('data:text/html;base64,AAAA').error !== null);
+ok('a huge picture is refused', checkAvatar('data:image/png;base64,' + 'A'.repeat(90000)).error !== null);
 ok('self edit needs a name', checkSelf({ name: ' ' }).errors.length === 1);
 ok('self edit takes name and phone only', JSON.stringify(checkSelf({ name: ' Ali  ', phone: '0300 1234567', account_type: 'admin', is_master: true }).value) === '{"name":"Ali","phone":"0300 1234567"}');
 ok('self edit refuses a bad phone', checkSelf({ name: 'Ali', phone: 'abc' }).errors.length === 1);
