@@ -358,6 +358,7 @@ button{font:inherit;color:inherit}
 /* ── Workspace panel ───────────────────────────────────────────── */
 .modal-wide{max-width:640px}
 .panel-h{margin:20px 0 8px;font-size:.8rem;font-weight:600;color:var(--ink-2);text-transform:uppercase;letter-spacing:.06em}
+.panel-h-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.panel-h-row .panel-h{margin:20px 0 8px}
 .team-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
 .team-row:last-child{border-bottom:0}
 .team-main{flex:1;min-width:140px}

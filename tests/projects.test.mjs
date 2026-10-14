@@ -207,7 +207,7 @@ await db.exec(`grant select on all tables in schema public to authenticated; sel
 const direct = (await db.query(`select id from projects`)).rows.length
   + (await db.query(`select id from notifications where user_id <> '${people.pm}'`)).rows.length;
 await db.exec('reset role;');
-ok('browser (RLS) cannot read project tables or others' notifications directly', direct === 0);
+ok('browser (RLS) cannot read project tables or other people notifications directly', direct === 0);
 
 console.log(failed ? `\n${failed} FAILED` : '\nProject checks passed');
 process.exit(failed ? 1 : 0);

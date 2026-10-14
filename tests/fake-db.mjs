@@ -57,6 +57,12 @@ function from(table) {
   };
   const admin = {
     getUserById: async (id) => ({ data: { user: { id } } }),
+    generateLink: async ({ type, email, options }) => {
+      let r = (await db.query('select id from auth.users where email = $1', [email])).rows[0];
+      if (!r) { if (type === 'recovery') return { error: { message: 'User not found' } }; r = (await db.query(`insert into auth.users(email, raw_user_meta_data) values ($1,$2) returning id`, [email, options && options.data || {}])).rows[0]; }
+      return { data: { user: { id: r.id }, properties: { action_link: 'https://x.test/link/' + r.id } }, error: null };
+    },
+    updateUserById: async (id, attrs) => { try { await db.query('update auth.users set email=$2 where id=$1', [id, attrs.email]); return { error: null }; } catch (e) { return { error: { message: e.message } }; } },
     deleteUser: async (id) => { try { await db.query('delete from auth.users where id = $1', [id]); return { error: null }; } catch (e) { return { error: { message: e.message } }; } },
   };
   return { from, rpc, auth: { admin, getUser: async (t) => tokens[t] ? { data: { user: { id: tokens[t] } }, error: null } : { data: { user: null }, error: { message: 'bad' } } } };

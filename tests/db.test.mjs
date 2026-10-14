@@ -68,7 +68,11 @@ await throws('a Master cannot carry a workspace', `update profiles set workspace
 await db.query(`update profiles set workspace_id='${wsA.id}', account_type='admin' where id='${a1}'`);
 await db.query(`update profiles set workspace_id='${wsB.id}', account_type='admin' where id='${a2}'`);
 await db.query(`update profiles set workspace_id='${wsA.id}' where id='${mem}'`);
-await throws('one active admin per workspace', `update profiles set account_type='admin' where id='${mem}'`, 'one_admin_per_workspace');
+await db.query(`update profiles set account_type='admin' where id='${mem}'`);
+ok('a workspace can have a second Admin', true);
+await db.query(`update profiles set status='inactive' where id='${mem}'`);
+ok('a second Admin can be switched off while another stays', true);
+await db.query(`update profiles set status='active', account_type='member' where id='${mem}'`);
 await throws('last active admin cannot be deactivated', `update profiles set status='inactive' where id='${a1}'`, 'last active admin');
 await throws('last active admin cannot be demoted', `update profiles set account_type='member' where id='${a1}'`, 'last active admin');
 

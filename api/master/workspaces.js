@@ -52,7 +52,7 @@ async function handleCreate(req, guard, res) {
   // ── Validate required fields ──
   const { name, slug, short_code, type, plan_cycle, plan_amount,
           plan_currency = 'PKR', plan_fx = 1,
-          admin_email, manager_email, roles = [] } = body;
+          admin_email, roles = [] } = body;
 
   const errs = [];
   if (!name || !name.trim())       errs.push('name is required');
@@ -62,10 +62,6 @@ async function handleCreate(req, guard, res) {
   if (plan_cycle && !ALLOWED_CYCLES.includes(plan_cycle)) errs.push('invalid plan_cycle');
   if (plan_amount !== undefined && (isNaN(plan_amount) || plan_amount < 0)) errs.push('invalid plan_amount');
   if (!isEmail(admin_email)) errs.push('valid admin_email is required');
-  if (manager_email && !isEmail(manager_email)) errs.push('manager_email is not a valid email');
-  if (manager_email && isEmail(manager_email) && isEmail(admin_email) &&
-      manager_email.trim().toLowerCase() === admin_email.trim().toLowerCase())
-    errs.push('manager_email must differ from admin_email');
 
   // roles: [{ role, edit }]  (a bare string means use-only). Duplicates merge.
   const roleMap = new Map();
@@ -83,7 +79,7 @@ async function handleCreate(req, guard, res) {
   if (!admin) return send(res, 500, { error: 'Server not configured' });
 
   // An email that already has an account cannot be invited again.
-  for (const [who, mail] of [['Admin', admin_email], ['Manager', manager_email]]) {
+  for (const [who, mail] of [['Admin', admin_email]]) {
     if (!mail) continue;
     const { data: ex } = await admin.from('profiles').select('id').eq('email', mail.trim().toLowerCase()).maybeSingle();
     if (ex) return send(res, 409, { error: `${who} email already has an account. Use a different email.` });
@@ -115,8 +111,8 @@ async function handleCreate(req, guard, res) {
   const workspaceId = wsId;
   const invites = {};
 
-  // ── 2/3. Create the admin (and optional manager) + a real set-password link ──
-  for (const [key, mail, type] of [['admin', admin_email, 'admin'], ['manager', manager_email, 'manager']]) {
+  // ── 2. Invite the Admin with a real set-password link (more people are added later from the workspace panel) ──
+  for (const [key, mail, type] of [['admin', admin_email, 'admin']]) {
     if (!mail) continue;
     const email = mail.trim().toLowerCase();
     const r = await makeLink(admin, email, { workspace_id: workspaceId, account_type: type, workspace_slug: slug });

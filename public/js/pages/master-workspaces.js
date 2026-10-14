@@ -365,19 +365,12 @@ function renderStep3(body, foot, state, goStep) {
     '<div class="wf-group">' +
       '<label class="wf-label" for="adminEmail">Admin Email <span class="req">*</span></label>' +
       '<input class="wf-input" id="adminEmail" type="email" placeholder="admin@client.com" value="' + esc(state.admin_email) + '">' +
-      '<p class="wf-hint">An invite email will be sent to this address.</p>' +
+      '<p class="wf-hint">You get a set-password link to share with this person.</p>' +
     '</div>' +
-    '<div class="wf-group">' +
-      '<label class="wf-label" for="mgrEmail">Manager Email <span class="muted">(optional)</span></label>' +
-      '<input class="wf-input" id="mgrEmail" type="email" placeholder="manager@client.com" value="' + esc(state.manager_email) + '">' +
-    '</div>';
+    '<p class="wf-hint">Only the Admin is invited now. The Admin adds the rest of the team, and you can add or edit people later from the workspace panel.</p>';
 
   // Validate as soon as the person leaves the field
   body.querySelector('#adminEmail').addEventListener('blur', (e) => {
-    const v = e.target.value.trim();
-    if (v && !isEmail(v)) shakeField(e.target, EMAIL_MSG, false);
-  });
-  body.querySelector('#mgrEmail').addEventListener('blur', (e) => {
     const v = e.target.value.trim();
     if (v && !isEmail(v)) shakeField(e.target, EMAIL_MSG, false);
   });
@@ -389,12 +382,8 @@ function renderStep3(body, foot, state, goStep) {
   foot.querySelector('#step3Back').addEventListener('click', () => goStep(2));
   foot.querySelector('#step3Next').addEventListener('click', () => {
     const ae = body.querySelector('#adminEmail').value.trim().toLowerCase();
-    const me = body.querySelector('#mgrEmail').value.trim().toLowerCase();
     if (!isEmail(ae)) return shakeField(body.querySelector('#adminEmail'), ae ? EMAIL_MSG : 'Admin email is required.');
-    if (me && !isEmail(me)) return shakeField(body.querySelector('#mgrEmail'), EMAIL_MSG);
-    if (me && me === ae) return shakeField(body.querySelector('#mgrEmail'), 'Manager email must differ from the admin email.');
     state.admin_email = ae;
-    state.manager_email = me;
     goStep(4);
   });
 }
@@ -415,7 +404,6 @@ function renderStep4(body, foot, state, goStep, sb, closeModal, onCreated) {
       row('Plan', planLabel + (paidAmt ? ' — ' + paidAmt : '')) +
       row('Roles', rolesSummary(state.roles)) +
       row('Admin', state.admin_email) +
-      (state.manager_email ? row('Manager', state.manager_email) : '') +
     '</div>' +
     '<p id="createErr" class="wf-err" hidden></p>';
 
@@ -447,7 +435,6 @@ function renderStep4(body, foot, state, goStep, sb, closeModal, onCreated) {
       if (state.plan_cycle)    payload.plan_cycle    = state.plan_cycle;
       if (state.plan_amount)   payload.plan_amount   = Number(state.plan_amount);
       if (state.plan_currency) payload.plan_currency = state.plan_currency;
-      if (state.manager_email) payload.manager_email = state.manager_email;
 
       const res = await fetch('/api/master/workspaces', {
         method: 'POST',
@@ -511,7 +498,7 @@ function showResultModal(json, state, onCreated) {
       '<div class="modal-body">' +
         '<div class="result-block"><p class="result-ws-name">' + esc(name) + '</p>' +
           '<p class="result-ws-slug muted small">/' + esc(ws.slug || state.slug) + ' · ' + esc(ws.short_code || state.short_code) + '</p></div>' +
-        part('admin', 'Admin link') + part('manager', 'Manager link') +
+        part('admin', 'Admin link') +
         '<p class="wf-hint">Each link works once and lasts about an hour. If it expires, open the workspace and press Regenerate.</p>' +
       '</div>' +
       '<div class="modal-foot"><span></span><button class="btn" id="resultDone" type="button">Done</button></div>' +
@@ -579,12 +566,13 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
       row('Type', TYPE_LABEL[ws.type] || ws.type) + row('Plan', planText) +
     '</div>' +
     '<h4 class="panel-h">Roles</h4>' + rolesTableHTML(roles) +
-    '<h4 class="panel-h">Team</h4><div id="teamList">' +
+    '<div class="panel-h-row"><h4 class="panel-h">Team</h4><button class="btn btn-sm btn-ghost" type="button" id="addPerson">' + icon('plus', 14) + ' Add Admin or Manager</button></div><div id="teamList">' +
       (d.team.length ? d.team.map((p) =>
         '<div class="team-row" data-u="' + esc(p.id) + '">' +
           '<div class="team-main"><strong>' + esc(p.name || who[p.account_type]) + '</strong>' +
             '<span class="muted small">' + esc(who[p.account_type]) + (p.email ? ' · ' + esc(p.email) : '') + '</span></div>' +
-          '<span class="chip chip-' + (p.pending ? 'warn' : 'ok') + '">' + (p.pending ? 'Invite pending' : 'Active') + '</span>' +
+          '<span class="chip chip-' + (p.status === 'inactive' ? 'muted' : p.pending ? 'warn' : 'ok') + '">' + (p.status === 'inactive' ? 'Inactive' : p.pending ? 'Invite pending' : 'Active') + '</span>' +
+          (p.account_type !== 'member' ? '<button class="btn btn-sm btn-ghost" type="button" data-edit="' + esc(p.id) + '">Edit</button>' : '') +
           '<button class="btn btn-sm btn-ghost" type="button" data-regen="' + esc(p.id) + '">Regenerate link</button>' +
           '<div class="team-link" hidden></div>' +
         '</div>').join('') : '<p class="muted small">No people yet.</p>') +
@@ -616,6 +604,11 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
     } catch (x) { showErr(x.message); }
     b.disabled = false; b.textContent = 'Regenerate link';
   }));
+
+  const reopen = () => { close(); openWorkspacePanel({ sb, id, onChanged }); };
+  body.querySelector('#addPerson').addEventListener('click', () => openPersonModal({ sb, id, ws, person: null, team: d.team, onDone: reopen }));
+  body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () =>
+    openPersonModal({ sb, id, ws, person: d.team.find((x) => x.id === b.dataset.edit), team: d.team, onDone: reopen })));
 
   const onHold = ws.status === 'suspended';
   foot.innerHTML = '<span class="foot-left"><button class="btn btn-sm btn-ghost" id="panelHold" type="button">' + (onHold ? 'Resume workspace' : 'Put on hold') + '</button>' +
@@ -649,6 +642,63 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
       }) });
       close(); onChanged();
     } catch (x) { showErr(x.message); e.target.disabled = false; e.target.textContent = 'Save changes'; }
+  });
+}
+
+// ── Add / edit an Admin or Manager of a workspace ─────────────────────────────
+function openPersonModal({ sb, id, ws, person, team, onDone }) {
+  const editing = !!person;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML =
+    '<div class="modal" role="dialog" aria-modal="true">' +
+      '<div class="modal-head"><h3 class="modal-title">' + (editing ? 'Edit ' + esc(person.name || 'person') : 'Add Admin or Manager') + '</h3>' +
+        '<button class="modal-close" type="button" data-x aria-label="Close">' + icon('x', 18) + '</button></div>' +
+      '<div class="modal-body">' +
+        '<div class="wf-group"><label class="wf-label" for="ppName">Full name <span class="req">*</span></label>' +
+          '<input class="wf-input" id="ppName" maxlength="80" value="' + esc(person ? person.name || '' : '') + '"></div>' +
+        '<div class="wf-group"><label class="wf-label" for="ppEmail">Email <span class="req">*</span></label>' +
+          '<input class="wf-input" id="ppEmail" type="email" autocomplete="off" spellcheck="false" value="' + esc(person ? person.email || '' : '') + '">' +
+          (editing ? '<p class="wf-hint">Changing the email changes what this person signs in with.</p>' : '') + '</div>' +
+        '<div class="wf-group"><label class="wf-label" for="ppType">Type</label><select class="wf-select" id="ppType">' +
+          '<option value="admin"' + (!person || person.account_type === 'admin' ? ' selected' : '') + '>Admin — full access, settings and billing of this workspace</option>' +
+          '<option value="manager"' + (person && person.account_type === 'manager' ? ' selected' : '') + '>Manager — runs the team, no settings</option></select></div>' +
+        (editing ? '<div class="wf-group"><label class="wf-label" for="ppStatus">Status</label><select class="wf-select" id="ppStatus">' +
+          '<option value="active"' + (person.status !== 'inactive' ? ' selected' : '') + '>Active</option>' +
+          '<option value="inactive"' + (person.status === 'inactive' ? ' selected' : '') + '>Inactive — cannot sign in</option></select></div>' : '') +
+        '<div id="ppResult"></div><p class="wf-err" id="ppErr" hidden></p>' +
+      '</div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" type="button" data-x>Cancel</button>' +
+        '<button class="btn" type="button" id="ppSave">' + (editing ? 'Save changes' : 'Add and get link') + '</button></div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  const $ = (q) => overlay.querySelector(q);
+  const close = () => overlay.remove();
+  overlay.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', close));
+  const err = $('#ppErr'), showErr = (m) => { err.textContent = m; err.hidden = !m; };
+  $('#ppName').focus();
+  $('#ppSave').addEventListener('click', async (e) => {
+    const name = $('#ppName').value.trim(), email = $('#ppEmail').value.trim();
+    if (!name) return shakeField($('#ppName'), 'Name is required.');
+    if (!isEmail(email)) return shakeField($('#ppEmail'), email ? EMAIL_MSG : 'Email is required.');
+    const btn = e.target; btn.disabled = true; showErr('');
+    try {
+      if (editing) {
+        await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=person&user_id=' + encodeURIComponent(person.id),
+          { method: 'PATCH', body: JSON.stringify({ name, email, account_type: $('#ppType').value, status: $('#ppStatus').value }) });
+        close(); onDone();
+      } else {
+        const r = await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=person',
+          { method: 'POST', body: JSON.stringify({ name, email, account_type: $('#ppType').value }) });
+        overlay.querySelector('.modal-body').innerHTML =
+          '<div class="result-block"><p class="result-ws-name">' + esc(name) + '</p><p class="muted small">' + esc(email) + '</p></div>' +
+          linkRow('Set-password link (valid ' + r.expires + ')', r.link, 'Set your password for ' + ws.name + ': ') +
+          '<p class="wf-hint">Share this link with ' + esc(name) + '. If it expires, open the workspace and press Regenerate link.</p>';
+        bindCopy(overlay);
+        overlay.querySelector('.modal-foot').innerHTML = '<span></span><button class="btn" type="button" id="ppDone">Done</button>';
+        overlay.querySelector('#ppDone').addEventListener('click', () => { close(); onDone(); });
+      }
+    } catch (x) { showErr(x.message); btn.disabled = false; }
   });
 }
 

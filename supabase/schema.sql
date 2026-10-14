@@ -1963,3 +1963,10 @@ revoke execute on function
   public.tasks_notify(), public.task_force_delete(bigint)
   from public, anon, authenticated;
 grant execute on function public.task_force_delete(bigint) to authenticated;
+
+-- =============================================================================
+-- PART 11 — more than one Admin per workspace
+-- The Master can add another Admin to a workspace and edit people inside it.
+-- The API still refuses to switch off or demote the last active Admin.
+-- =============================================================================
+drop index if exists public.one_admin_per_workspace;
