@@ -78,7 +78,7 @@ console.log('Tasks (admin)');
 const [t1] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role, priority, due_date) values ('Call 50 leads', $1, 'cold_caller', 'high', current_date - 1) returning id, created_by, status, workspace_id`, [M1]));
 ok(t1.created_by === A && t1.status === 'todo' && t1.workspace_id === W1, 'admin creates task (created_by and workspace forced)');
 const [t2] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('Find 20 prospects', $1, 'lead_gen') returning id`, [M1]));
-const [t3] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('Send invoices', $1, 'finance') returning id`, [M2]));
+const [tF] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('Send invoices', $1, 'finance') returning id`, [M2]));
 await expectErr(() => as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('x', $1, 'finance')`, [M1])), 'role mismatch blocked', /does not have/);
 await expectErr(() => as(M1, () => q(`insert into tasks (title) values ('hack')`)), 'member cannot create tasks', /row-level security|permission/);
 const [mt] = await as(MG, () => q(`insert into tasks (title, assigned_to) values ('Manager task', $1) returning id`, [M2]));
@@ -97,8 +97,8 @@ await as(M1, async () => {
   await expectErr(() => q(`select team_presence()`), 'member cannot view presence', /admin or a manager/);
   await expectErr(() => q(`select * from report_daily(current_date, current_date, null)`), 'member cannot view team report', /own records/);
   await expectErr(() => q(`select * from report_daily(current_date, current_date, $1)`, [M2]), 'member cannot view another member report', /own records/);
-  await expectErr(() => q(`select timer_start($1)`, [t3.id]), 'member cannot time someone else\'s task', /not assigned/);
-  await expectErr(() => q(`insert into task_comments (task_id, author_id, body) values ($1,$2,'hi')`, [t3.id, M1]), 'member cannot comment on other task', /row-level/);
+  await expectErr(() => q(`select timer_start($1)`, [tF.id]), 'member cannot time someone else\'s task', /not assigned/);
+  await expectErr(() => q(`insert into task_comments (task_id, author_id, body) values ($1,$2,'hi')`, [tF.id, M1]), 'member cannot comment on other task', /row-level/);
 });
 ok((await q(`select last_seen_at from profiles where id=$1`, [M1]))[0].last_seen_at === null, 'last_seen_at unchanged by starting a session');
 ok((await q(`select action from activity_logs where action='invite_accepted'`)).length === 1, 'first sign-in is logged as joined');
@@ -243,7 +243,7 @@ await as(M2, async () => {
 });
 
 console.log('Deactivation');
-const S4 = await as(M2, async () => { const id = (await q(`select session_start('ua','dev','login') as id`))[0].id; await q(`select timer_start($1)`, [t3.id]); return id; });
+const S4 = await as(M2, async () => { const id = (await q(`select session_start('ua','dev','login') as id`))[0].id; await q(`select timer_start($1)`, [tF.id]); return id; });
 await q(`update profiles set status='inactive' where id=$1`, [M2]);
 await q(`select close_member_sessions($1)`, [M2]);
 ok((await q(`select end_reason from user_sessions where id=$1`, [S4]))[0].end_reason === 'inactive', 'switching a person off ends their open sessions');
@@ -288,12 +288,12 @@ await as(B, async () => {
   ok((await q(`select count(*)::int c from report_daily('2026-10-01', current_date + 1, null) where user_id = any($1::uuid[])`, [[A, M1, M2, Z, MG]]))[0].c === 0, 'the all-people report never contains Alpha people');
   ok((await q(`select count(*)::int c from report_tasks('2026-10-01', current_date + 1, null) where title <> 'Beta task'`))[0].c === 0, 'the task report never contains Alpha tasks');
   ok((await q(`select count(*)::int c from team_presence() where user_id = any($1::uuid[])`, [[A, M1, M2, Z, MG]]))[0].c === 0, 'team presence never contains Alpha people');
-  await expectErr(() => q(`select task_review($1, true, 'x')`, [t3.id]), 'cannot review an Alpha task', /not found|not waiting/i);
+  await expectErr(() => q(`select task_review($1, true, 'x')`, [tF.id]), 'cannot review an Alpha task', /not found|not waiting/i);
   await expectErr(() => q(`insert into tasks (title, assigned_to) values ('steal', $1)`, [M1]), 'cannot assign a task to an Alpha person', /row-level|active members of this workspace/);
   await expectErr(() => q(`insert into tasks (workspace_id, title) values ($1, 'smuggle')`, [W1]), 'cannot write a task into Alpha', /row-level/);
-  await expectErr(() => q(`insert into task_comments (task_id, author_id, body) values ($1,$2,'hi')`, [t3.id, B]), 'cannot comment on an Alpha task', /row-level/);
-  ok((await q(`update tasks set title='pwn' where id=$1 returning id`, [t3.id])).length === 0, 'cannot update an Alpha task');
-  ok((await q(`delete from tasks where id=$1 returning id`, [t3.id])).length === 0, 'cannot delete an Alpha task');
+  await expectErr(() => q(`insert into task_comments (task_id, author_id, body) values ($1,$2,'hi')`, [tF.id, B]), 'cannot comment on an Alpha task', /row-level/);
+  ok((await q(`update tasks set title='pwn' where id=$1 returning id`, [tF.id])).length === 0, 'cannot update an Alpha task');
+  ok((await q(`delete from tasks where id=$1 returning id`, [tF.id])).length === 0, 'cannot delete an Alpha task');
   await q(`select sweep_stale_sessions()`);
 });
 ok((await q(`select ended_at is null as open from user_sessions where id=$1`, [aOpen]))[0].open, 'a Beta sweep leaves Alpha sessions alone');
@@ -309,6 +309,44 @@ await as(MASTER, async () => {
   ok((await q(`select count(*)::int c from tasks`))[0].c === 0, 'a Master does not read workspace tasks through the browser');
   await expectErr(() => q(`select session_start()`), 'a Master cannot start a workspace session', /workspace/);
 });
+
+console.log('Notifications (PART 10)');
+const nOf = (uid) => q(`select kind, title, body, link, read_at from notifications where user_id=$1 order by created_at, id`, [uid]);
+const [tN] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('Notify me', $1, 'cold_caller') returning id`, [M1]));
+let nn = await nOf(M1);
+ok(nn.some(n => n.title === 'New task: Notify me' && n.kind === 'task' && n.body === 'Assigned by Boss Admin (Admin)' && n.link === '#/my-tasks'), 'assignee is told about a new task, with who assigned it');
+await as(M1, () => q(`select task_set_status($1, 'in_progress')`, [tN.id]));
+await as(M1, () => q(`select task_set_status($1, 'in_review')`, [tN.id]));
+ok((await nOf(A)).some(n => n.kind === 'review' && n.title === 'Ready for review: Notify me'), 'admin is told a task is ready for review');
+ok((await nOf(MG)).some(n => n.kind === 'review'), 'managers are told too');
+ok(!(await nOf(M2)).some(n => n.kind === 'review'), 'other members are not');
+await as(A, () => q(`select task_review($1, false, 'Please add numbers')`, [tN.id]));
+ok((await nOf(M1)).some(n => n.title === 'Changes requested: Notify me' && n.body === 'Please add numbers'), 'changes requested reaches the assignee with the note');
+await as(M1, () => q(`select task_set_status($1, 'in_review')`, [tN.id]));
+await as(A, () => q(`select task_review($1, true, null)`, [tN.id]));
+ok((await nOf(M1)).some(n => n.title === 'Approved: Notify me'), 'approval reaches the assignee');
+await as(A, () => q(`update tasks set priority='urgent' where id=$1`, [tN.id]));
+ok((await nOf(M1)).some(n => n.title === 'Task updated: Notify me'), 'editing a task tells the assignee');
+await as(M1, async () => {
+  ok((await q(`select count(*)::int c from notifications`))[0].c === (await nOf(M1)).length, 'a member reads only his own notifications');
+  await expectErr(() => q(`update notifications set title='hacked' where user_id=$1`, [M1]), 'a member cannot rewrite a notification', /permission/);
+  const r = await q(`update notifications set read_at=now() where read_at is null returning id`);
+  ok(r.length > 0, 'a member can mark his notifications read');
+  await expectErr(() => q(`insert into notifications(workspace_id,user_id,text) values ($1,$2,'x')`, [W1, M1]), 'a member cannot create notifications', /permission|policy/);
+});
+await as(M2, async () => { ok((await q(`select count(*)::int c from notifications where user_id=$1`, [M1]))[0].c === 0, 'nobody reads another member\'s notifications'); });
+await as(B, async () => { ok((await q(`select count(*)::int c from notifications where workspace_id=$1`, [W1]))[0].c === 0, 'another workspace reads none of them'); });
+
+console.log('Force delete a task with tracked time');
+const [tFD] = await as(A, () => q(`insert into tasks (title, assigned_to, team_role) values ('Timed task', $1, 'cold_caller') returning id`, [M1]));
+await as(M1, async () => { await q(`select session_start('ua','dev','login')`); await q(`select timer_start($1)`, [tFD.id]); await q(`select timer_stop($1)`, [tFD.id]); });
+await as(A, () => expectErr(() => q(`delete from tasks where id=$1`, [tFD.id]), 'a plain delete is blocked when time was tracked', /foreign key|violates|permission/));
+await as(M1, () => expectErr(() => q(`select task_force_delete($1)`, [tFD.id]), 'a member cannot force delete', /Only the admin or a manager/));
+await as(B, () => expectErr(() => q(`select task_force_delete($1)`, [tFD.id]), 'another workspace cannot force delete', /not found|Task not found|workspace/i));
+await as(MG, () => q(`select task_force_delete($1)`, [tFD.id]));
+ok((await q(`select count(*)::int c from tasks where id=$1`, [tFD.id]))[0].c === 0, 'a manager can force delete');
+ok((await q(`select count(*)::int c from task_time_entries where task_id=$1`, [tFD.id]))[0].c === 0, 'its time entries go with it');
+ok((await q(`select count(*)::int c from activity_logs where action='task_force_deleted'`))[0].c === 1, 'one audit line keeps the record');
 
 console.log('Deleting a person and a workspace');
 const doomed = await person('gone@alpha.com', 'Gone Guy', W1, 'member', ['cold_caller']);

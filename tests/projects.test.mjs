@@ -204,9 +204,10 @@ catch { ok('DB refuses a member from another workspace', true); }
 try { await db.query(`update projects set manager_id='${people.des}' where id='${proj}'`); ok('DB refuses a non-Project-Manager as manager', false); }
 catch { ok('DB refuses a non-Project-Manager as manager', true); }
 await db.exec(`grant select on all tables in schema public to authenticated; select set_config('request.jwt.claim.sub','${people.pm}',false); set role authenticated;`);
-const direct = (await db.query(`select id from projects`)).rows.length + (await db.query(`select id from notifications`)).rows.length;
+const direct = (await db.query(`select id from projects`)).rows.length
+  + (await db.query(`select id from notifications where user_id <> '${people.pm}'`)).rows.length;
 await db.exec('reset role;');
-ok('browser (RLS) cannot read project tables directly', direct === 0);
+ok('browser (RLS) cannot read project tables or others' notifications directly', direct === 0);
 
 console.log(failed ? `\n${failed} FAILED` : '\nProject checks passed');
 process.exit(failed ? 1 : 0);

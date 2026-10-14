@@ -11,15 +11,6 @@ const NAV = [
   { path: '/master/settings', label: 'Settings', icon: 'cog' },
 ];
 
-const MEMBER_NAV = [
-  { path: '/home', label: 'Home', icon: 'home', page: () => import('/js/pages/home.js') },
-  { path: '/projects', label: 'Projects', icon: 'folder', page: () => import('/js/pages/projects.js') },
-  { path: '/team', label: 'Team', icon: 'users', page: () => import('/js/pages/team.js') },
-  { path: '/activity', label: 'Activity', icon: 'pulse', boss: true, page: () => import('/js/pages/activity.js') },
-  { path: '/tasks', label: 'Tasks', icon: 'check' },
-  { path: '/leads', label: 'Leads', icon: 'building' },
-  { path: '/finance', label: 'Finance', icon: 'wallet' },
-];
 
 boot();
 
@@ -58,13 +49,17 @@ function fail(msg) {
 // ---------------------------------------------------------------------------
 async function memberWorld(sb, prof) {
   if (!prof.workspace_id) return leave(sb, 'noprofile');
-  const { data: ws } = await sb.from('workspaces').select('name,status,logo_url').eq('id', prof.workspace_id).maybeSingle();
+  const { data: ws } = await sb.from('workspaces').select('id,name,slug,status,logo_url').eq('id', prof.workspace_id).maybeSingle();
   if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
-  document.getElementById('boot').remove();
-  const pill = { admin: 'Admin', manager: 'Manager' }[prof.account_type] || 'Member';
-  const nav = MEMBER_NAV.filter((n) => !n.boss || ['admin', 'manager'].includes(prof.account_type));
-  mountShell(sb, prof, { bell: true, nav, home: '/home', brand: ws.name, pill, suffix: ws.name, ws, logo: ws.logo_url || '', admin: prof.account_type === 'admin' });
+  // The workspace app has its own look: swap the Webnox stylesheet for the workspace one.
+  document.querySelectorAll('link[href="/css/app.css"]').forEach((l) => l.remove());
+  await loadCss('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
+  await loadCss('/css/eco.css');
+  const boot = document.getElementById('boot');
+  if (boot) boot.remove();
+  const m = await import('/js/eco/shell.js');
+  await m.start({ profile: prof, workspace: ws });
 }
 
 // ---------------------------------------------------------------------------

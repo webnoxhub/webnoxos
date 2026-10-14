@@ -1823,3 +1823,143 @@ begin
   return ids;
 end $$;
 revoke all on function public.purge_workspace(uuid) from public, anon, authenticated;
+
+-- ============================================================================
+-- PART 10 — Notifications for tasks, and deleting a task
+-- ============================================================================
+-- Run this whole part once in the Supabase SQL Editor (after PART 9). Safe to run again.
+-- The same bell now serves the staffing-request approvals and the task alerts.
+
+alter table public.notifications add column if not exists kind  text not null default 'info';
+alter table public.notifications add column if not exists title text;
+alter table public.notifications add column if not exists body  text not null default '';
+alter table public.notifications add column if not exists link  text;
+alter table public.notifications alter column text drop not null;
+
+alter table public.notifications enable row level security;
+drop policy if exists tenant_isolation on public.notifications;
+create policy tenant_isolation on public.notifications as restrictive for all to authenticated
+  using (workspace_id = (select public.current_workspace()))
+  with check (workspace_id = (select public.current_workspace()));
+drop policy if exists notifications_own_read on public.notifications;
+create policy notifications_own_read on public.notifications for select to authenticated
+  using (user_id = (select auth.uid()));
+drop policy if exists notifications_own_update on public.notifications;
+create policy notifications_own_update on public.notifications for update to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+-- A person reads their own bell and can only mark things as read.
+revoke all on public.notifications from anon, authenticated;
+grant select on public.notifications to authenticated;
+grant update (read_at) on public.notifications to authenticated;
+
+-- "Ali Khan (Designer)" — name plus designation, used in notifications.
+create or replace function public.member_label(p_id uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select member_name(p.id) || coalesce(' (' || nullif(p.job_title, '') || ')',
+           case when p.account_type = 'admin' then ' (Admin)' else '' end)
+    from profiles p where p.id = p_id;
+$$;
+
+-- Send a notification: never to the person who caused it, never to someone switched off,
+-- never across workspaces.
+create or replace function public.notify(p_user uuid, p_kind text, p_title text, p_body text default '', p_link text default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_ws uuid;
+begin
+  if p_user is null or p_user = auth.uid() then return; end if;
+  select workspace_id into v_ws from profiles where id = p_user and status = 'active';
+  if v_ws is null then return; end if;
+  if auth.uid() is not null and v_ws is distinct from current_workspace() then return; end if;
+  insert into notifications (workspace_id, user_id, kind, title, body, link, text)
+  values (v_ws, p_user, p_kind, left(p_title, 200), left(coalesce(p_body, ''), 500), p_link, left(p_title, 200));
+end $$;
+
+create or replace function public.notify_managers(p_kind text, p_title text, p_body text default '', p_link text default null, p_ws uuid default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare r record; v_ws uuid := coalesce(p_ws, current_workspace());
+begin
+  if v_ws is null then return; end if;
+  for r in select p.id from profiles p
+            where p.workspace_id = v_ws and p.status = 'active' and p.account_type in ('admin', 'manager') loop
+    perform notify(r.id, p_kind, p_title, p_body, p_link);
+  end loop;
+end $$;
+
+create or replace function public.notify_role(p_role text, p_kind text, p_title text, p_body text default '', p_link text default null, p_ws uuid default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare r record; v_ws uuid := coalesce(p_ws, current_workspace());
+begin
+  if v_ws is null then return; end if;
+  for r in select m.member_id as id from member_roles m join profiles p on p.id = m.member_id
+            where m.role_key = p_role and p.workspace_id = v_ws and p.status = 'active' loop
+    perform notify(r.id, p_kind, p_title, p_body, p_link);
+  end loop;
+end $$;
+
+create or replace function public.tasks_notify() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_link text := '#/my-tasks';
+begin
+  if tg_op = 'INSERT' then
+    perform notify(new.assigned_to, 'task', 'New task: ' || new.title,
+      'Assigned by ' || coalesce(member_label(auth.uid()), 'your manager'), v_link);
+    return new;
+  end if;
+  if new.assigned_to is distinct from old.assigned_to then
+    perform notify(new.assigned_to, 'task', 'New task: ' || new.title,
+      'Assigned by ' || coalesce(member_label(auth.uid()), 'your manager'), v_link);
+  end if;
+  if new.status is distinct from old.status then
+    if new.status = 'in_review' then
+      perform notify_managers('review', 'Ready for review: ' || new.title,
+        'Submitted by ' || coalesce(member_name(new.assigned_to), 'a member'), '#/tasks?status=in_review', new.workspace_id);
+    elsif old.status = 'in_review' and new.status = 'completed' then
+      perform notify(new.assigned_to, 'task', 'Approved: ' || new.title, coalesce(new.review_note, ''), v_link);
+    elsif old.status = 'in_review' then
+      perform notify(new.assigned_to, 'task', 'Changes requested: ' || new.title, coalesce(new.review_note, ''), v_link);
+    elsif new.assigned_to is not distinct from old.assigned_to then
+      perform notify(new.assigned_to, 'task', 'Task moved to ' || replace(new.status, '_', ' ') || ': ' || new.title, '', v_link);
+    end if;
+  elsif new.assigned_to is not distinct from old.assigned_to
+        and (new.title, new.description, new.priority, new.due_date) is distinct from (old.title, old.description, old.priority, old.due_date) then
+    perform notify(new.assigned_to, 'task', 'Task updated: ' || new.title, 'Check the latest details', v_link);
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists tasks_notify on public.tasks;
+create trigger tasks_notify after insert or update on public.tasks
+  for each row execute function public.tasks_notify();
+
+-- A normal delete is blocked when a task has tracked time. The admin or a manager can force it:
+-- the task, its comments and its timer entries go, and one audit line keeps the record.
+alter table public.task_time_entries drop constraint if exists task_time_entries_task_id_fkey;
+alter table public.task_time_entries add constraint task_time_entries_task_id_fkey
+  foreign key (task_id) references public.tasks(id);
+
+create or replace function public.task_force_delete(p_task bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); t tasks%rowtype; v_secs bigint; v_entries int; v_comments int;
+begin
+  if not is_manager() then raise exception 'Only the admin or a manager can force delete a task'; end if;
+  select * into t from tasks where id = p_task for update;
+  if not found or t.workspace_id is distinct from current_workspace() then raise exception 'Task not found'; end if;
+  select count(*), coalesce(sum(extract(epoch from (coalesce(ended_at, now()) - started_at))), 0)::bigint
+    into v_entries, v_secs from task_time_entries where task_id = p_task;
+  select count(*) into v_comments from task_comments where task_id = p_task;
+  perform log_event('task_force_deleted', 'task', p_task::text,
+    'Force deleted task "' || t.title || '"' || case when v_entries > 0 then ' with ' || round(v_secs / 3600.0, 2) || 'h tracked' else '' end,
+    jsonb_build_object('title', t.title, 'assigned_to', t.assigned_to, 'status', t.status,
+                       'time_entries', v_entries, 'tracked_seconds', v_secs, 'comments', v_comments),
+    t.assigned_to);
+  delete from task_time_entries where task_id = p_task;
+  delete from tasks where id = p_task;   -- comments go with it (on delete cascade)
+end $$;
+
+revoke execute on function
+  public.member_label(uuid), public.notify(uuid, text, text, text, text),
+  public.notify_managers(text, text, text, text, uuid), public.notify_role(text, text, text, text, text, uuid),
+  public.tasks_notify(), public.task_force_delete(bigint)
+  from public, anon, authenticated;
+grant execute on function public.task_force_delete(bigint) to authenticated;
