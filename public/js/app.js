@@ -112,6 +112,8 @@ function mountShell(sb, prof, cfg) {
             '<button class="avatar" id="avatar" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">' + esc(initials) + '</button>' +
             '<div class="menu" id="avatarMenu" hidden>' +
               '<p class="menu-name">' + esc(prof.name || '') + '</p><p class="menu-mail">' + esc(prof.email || '') + '</p>' +
+              '<button class="menu-item" id="myProfile" type="button">' + icon('users', 16) + ' My profile</button>' +
+              '<button class="menu-item" id="myPass" type="button">' + icon('cog', 16) + ' Change password</button>' +
               (cfg.admin ? '<button class="menu-item" id="chLogo" type="button">' + icon('image', 16) + ' Workspace logo</button>' : '') +
               '<button class="menu-item" id="signout" type="button">' + icon('logout', 16) + ' Sign out</button>' +
             '</div>' +
@@ -146,6 +148,8 @@ function mountShell(sb, prof, cfg) {
   document.addEventListener('click', () => setMenu(false));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenu(false); closeNav(); } });
   document.getElementById('signout').addEventListener('click', () => signOut(sb));
+  document.getElementById('myProfile').addEventListener('click', () => { setMenu(false); import('/js/profile.js').then((m) => m.openProfile(sb, prof, cfg.ws ? cfg.ws.name : cfg.brand)); });
+  document.getElementById('myPass').addEventListener('click', () => { setMenu(false); import('/js/profile.js').then((m) => m.openPassword(sb)); });
   const chLogo = document.getElementById('chLogo');
   if (chLogo) chLogo.addEventListener('click', () => {
     setMenu(false);

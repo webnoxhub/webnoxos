@@ -100,6 +100,8 @@ async function edit(admin, me, target, activeRoles, req, res) {
 
   const { error } = await admin.from('profiles').update(v).eq('id', target.id).eq('workspace_id', target.workspace_id);
   if (error) return send(res, 502, { error: error.message });
+  // Switched off: end his open sessions and pause his task timer right away.
+  if (v.status === 'inactive') await admin.rpc('close_member_sessions', { p_member: target.id });
   send(res, 200, { ok: true });
 }
 

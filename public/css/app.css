@@ -461,3 +461,6 @@ body[data-world="master"] .wf-select option{ background:#0f2744; color:#fff; }
 .danger-note{ margin:0 0 14px;padding:10px 12px;border-radius:8px;background:var(--err-bg,#fee2e2);color:var(--err,#b91c1c);font-size:.84rem;line-height:1.5; }
 
 .app-foot{margin-top:auto;padding:16px 24px;text-align:center;font-size:12px;color:var(--muted)}
+
+.pf-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}.pf-av{width:48px;height:48px;cursor:default}.pf-name{margin:0;font-weight:700;font-size:17px}
+.pf-row{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}.pf-k{color:var(--muted)}.pf-v{word-break:break-word}
