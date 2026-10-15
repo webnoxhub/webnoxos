@@ -9,7 +9,7 @@ import { refreshTimer, mountTimerPill } from './timer.js';
 import { esc, icon, avatar, fullName, closeDrawer, ROLE_ICONS, toast } from './ui.js';
 
 // Pages that exist so far. Each phase adds its pages here.
-const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients', 'projects']);
+const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients', 'projects', 'finance', 'permissions']);
 
 const ADMIN_NAV = [
   { route: 'dashboard', label: 'Dashboard', icon: 'dashboard', page: 'admin-dashboard' },
@@ -88,10 +88,12 @@ export async function start({ profile: boot, workspace }) {
 
   // A sign-in that happened a moment ago is a "login"; reopening the app later is a "resume".
   const fresh = Date.now() - Date.parse(session.user.last_sign_in_at || 0) < 90_000;
-  await startTracking({ userId: profile.id, idleMinutes: state.settings.idle_minutes, via: fresh ? 'login' : 'resume' });
-
   renderShell();
-  await refreshTimer();
+  // Tracking and the running timer sync in the background so the page does not wait on them
+  startTracking({ userId: profile.id, idleMinutes: state.settings.idle_minutes, via: fresh ? 'login' : 'resume' }).catch(() => {});
+  // Bill / salary reminders and last month's report notice: safe to repeat, each happens once
+  if (state.isAdmin || can('finance')) supabase.rpc('finance_sweep').then(() => {}, () => {});
+  refreshTimer().catch(() => {});
   window.addEventListener('hashchange', route);
   route();
 
@@ -143,13 +145,6 @@ function renderShell() {
           ${nav.filter((n) => !n.hidden).map((n) => `${n.route === 'my-tasks' && state.isAdmin ? '<div class="nav-title">My work</div>' : ''}<a href="#/${n.route}" data-route="${n.route}" title="${n.label}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')}
           ${roleLinks}
         </nav>
-        <div class="sidebar-foot">
-          <p class="tracking-note">${icon('shield', 13)}<span>Sign-ins, active time and task timers are recorded. ${state.isOwner ? '' : '<a href="#/my-activity">See your records</a>'}</span></p>
-          <div class="me">
-            <div class="who">${avatar(p)}<div><div class="name">${esc(fullName(p))}</div><div class="sub">${state.isOwner ? 'Admin' : state.isAdmin ? 'Manager' : esc(p.job_title || 'Team member')}</div></div></div>
-            <button class="btn btn-ghost btn-icon btn-sm" id="signout" title="Sign out" aria-label="Sign out">${icon('logout')}</button>
-          </div>
-        </div>
       </aside>
       <div class="main">
         <header class="topbar">
@@ -173,7 +168,6 @@ function renderShell() {
   shell.addEventListener('click', (e) => {
     if (shell.classList.contains('nav-open') && (e.target.closest('.nav a') || e.target === shell)) shell.classList.remove('nav-open');
   });
-  document.getElementById('signout').onclick = signOut;
 
   // Collapse / expand the sidebar (desktop), remembered per browser
   const setCollapsed = (on) => {
