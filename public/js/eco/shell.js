@@ -95,12 +95,21 @@ export async function start({ profile: boot, workspace }) {
   if (state.isAdmin || can('finance')) supabase.rpc('finance_sweep').then(() => {}, () => {});
   refreshTimer().catch(() => {});
   window.addEventListener('hashchange', route);
-  // Slim down the page header once the page is scrolled (with a gap so it never flickers)
+  // Slim down the page header once the page is scrolled. The header keeps the same footprint in the
+  // layout (the space it gives up becomes bottom margin), so nothing below it jumps and it cannot flicker.
   const root = document.documentElement;
+  const foot = (h) => h.offsetHeight + parseFloat(getComputedStyle(h).marginBottom);
+  const compensate = () => {
+    const h = document.querySelector('.content > .page-head'); if (!h || h.dataset.comp) return;
+    root.classList.remove('is-scrolled'); h.style.marginBottom = ''; const before = foot(h);
+    root.classList.add('is-scrolled'); const after = foot(h);
+    h.style.marginBottom = `${parseFloat(getComputedStyle(h).marginBottom) + before - after}px`; h.dataset.comp = '1';
+  };
   const onScroll = () => {
-    const y = window.scrollY, room = document.documentElement.scrollHeight - window.innerHeight;
-    if (!root.classList.contains('is-scrolled') && y > 48 && room > 200) root.classList.add('is-scrolled');
-    else if (root.classList.contains('is-scrolled') && y < 8) root.classList.remove('is-scrolled');
+    const y = window.scrollY, on = root.classList.contains('is-scrolled');
+    if (!on && y > 60) compensate();
+    else if (on && y < 6) { root.classList.remove('is-scrolled'); const h = document.querySelector('.content > .page-head'); if (h) { h.style.marginBottom = ''; delete h.dataset.comp; } }
+    else if (on) compensate();   // a new page was drawn while scrolled
   };
   window.addEventListener('scroll', onScroll, { passive: true });
   route();
