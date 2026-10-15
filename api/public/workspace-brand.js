@@ -1,6 +1,6 @@
 // POST /api/public/workspace-brand   { slug }   ->  { name, slug } or {}
 // Runs on the server so no table is readable from the login page. Same status and
-// about the same timing whether the workspace exists or not. Only live workspaces answer.
+// about the same timing whether the workspace exists or not. Only workspaces the app itself lets people into answer (setup, trial, active).
 import { createClient } from '@supabase/supabase-js';
 import { readJson } from '../../lib/invites.js';
 
@@ -17,7 +17,7 @@ export default async function handler(req, res) {
       if (typeof slug === 'string' && SLUG.test(slug) && url && key) {
         const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
         const { data } = await admin.from('workspaces').select('name,slug,status,logo_url,logo_only').eq('slug', slug).maybeSingle();
-        if (data && (data.status === 'trial' || data.status === 'active')) out = { name: data.name, slug: data.slug, logo_url: data.logo_url || null, logo_only: !!(data.logo_url && data.logo_only) };
+        if (data && (['setup', 'trial', 'active'].includes(data.status))) out = { name: data.name, slug: data.slug, logo_url: data.logo_url || null, logo_only: !!(data.logo_url && data.logo_only) };
       }
     }
   } catch { out = {}; }
