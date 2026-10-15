@@ -2646,8 +2646,14 @@ do $$ declare t text; ix text; begin
 end $$;
 
 -- (a full re-run of the file would put PART 7's old guards back on the new tables)
-drop trigger if exists projects_manager_guard on public.projects;
-drop trigger if exists project_members_guard on public.project_members;
+do $$ begin
+  if to_regclass('public.projects') is not null then
+    drop trigger if exists projects_manager_guard on public.projects;
+  end if;
+  if to_regclass('public.project_members') is not null then
+    drop trigger if exists project_members_guard on public.project_members;
+  end if;
+end $$;
 
 -- 15.1 eco_fill_workspace learns about projects and staffing requests -------------------------
 create or replace function public.eco_fill_workspace() returns trigger
@@ -3494,3 +3500,932 @@ end $$;
 
 drop function if exists public.project_manager_guard();
 drop function if exists public.project_member_guard();
+
+-- ============================================================================
+-- PART 16 — Finance (expenses, bills, salaries, investments) + Invoices, inside every workspace
+-- ============================================================================
+-- Run once in the Supabase SQL Editor (after PART 15). Safe to run again.
+--
+--   * Admin and Manager: everything (salaries are visible only to them).
+--   * Finance role and Project Managers: what the Admin allows on the Permissions page (module "finance").
+--   * Money is stored as currency + original amount + exchange rate; the converted amount (workspace
+--     currency) is calculated by the database, never by the browser.
+--   * Invoice numbers, reference numbers and totals are made by the database.
+--   * Every row belongs to one workspace; a person of another workspace can never see or touch it.
+
+-- 16.1 Small helpers ------------------------------------------------------------------------------
+create or replace function public.num_pad(p bigint, w int) returns text
+language sql immutable as $$
+  select case when length(p::text) >= w then p::text else lpad(p::text, w, '0') end;
+$$;
+
+-- "Him Fashions" -> HF, "Glow" -> GW (first + last letter), "" -> CL
+create or replace function public.name_initials(p_name text) returns text
+language plpgsql immutable as $$
+declare w text[]; l text;
+begin
+  w := array_remove(regexp_split_to_array(upper(regexp_replace(coalesce(p_name, ''), '[^A-Za-z0-9]+', ' ', 'g')), ' '), '');
+  l := array_to_string(w, '');
+  if l = '' then return 'CL'; end if;
+  if array_length(w, 1) >= 2 then return left(w[1], 1) || left(w[2], 1); end if;
+  if length(l) = 1 then return l || 'X'; end if;
+  return left(l, 1) || right(l, 1);
+end $$;
+
+create or replace function public.is_manager_id(p_id uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select account_type in ('admin', 'manager') and status = 'active'
+                     from public.profiles where id = p_id and workspace_id = public.current_workspace()), false);
+$$;
+
+-- "Co-Founder", or "Admin", or the team roles
+create or replace function public.issuer_title(p_id uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce(nullif(trim(p.job_title), ''), case when p.account_type = 'admin' then 'Admin' end,
+                  (select string_agg(r.name, ', ' order by r.sort) from public.member_roles m join public.team_roles r on r.key = m.role_key where m.member_id = p.id))
+    from public.profiles p where p.id = p_id and p.workspace_id = public.current_workspace();
+$$;
+
+-- 16.2 Clients get a short invoice code (unique inside the workspace) ---------------------------------
+alter table public.clients add column if not exists invoice_code text;
+create unique index if not exists clients_invoice_code_uq on public.clients (workspace_id, invoice_code);
+
+-- A code no other client of this workspace has, built from the name
+create or replace function public.invoice_initials(p_ws uuid, p_name text, p_exclude bigint default null) returns text
+language plpgsql security definer set search_path = public as $$
+declare w text[]; l text; c text; cands text[] := '{}'; i int; j int; n int := 2;
+begin
+  w := array_remove(regexp_split_to_array(upper(regexp_replace(coalesce(p_name, ''), '[^A-Za-z0-9]+', ' ', 'g')), ' '), '');
+  l := left(array_to_string(w, ''), 24);
+  if l = '' then l := 'CL'; w := array['CL']; end if;
+  if length(l) = 1 then l := l || 'X'; end if;
+  cands := cands || name_initials(p_name);
+  cands := cands || (left(l, 1) || right(l, 1));
+  for i in 2..length(l) loop cands := cands || (left(l, 1) || substr(l, i, 1)); end loop;
+  if array_length(w, 1) >= 3 then cands := cands || (left(w[1], 1) || left(w[2], 1) || left(w[3], 1)); end if;
+  for i in 2..length(l) loop for j in i + 1..length(l) loop
+    cands := cands || (left(l, 1) || substr(l, i, 1) || substr(l, j, 1));
+  end loop; end loop;
+  foreach c in array cands loop
+    if not exists (select 1 from public.clients where workspace_id = p_ws and invoice_code = c and id is distinct from p_exclude) then return c; end if;
+  end loop;
+  loop
+    c := cands[1] || n;
+    if not exists (select 1 from public.clients where workspace_id = p_ws and invoice_code = c and id is distinct from p_exclude) then return c; end if;
+    n := n + 1;
+  end loop;
+end $$;
+
+create or replace function public.clients_codes_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then new.invoice_code := null; else new.invoice_code := old.invoice_code; end if;  -- never changes once given
+  if new.invoice_code is null then
+    perform pg_advisory_xact_lock(hashtext('invcode:' || new.workspace_id::text));
+    new.invoice_code := invoice_initials(new.workspace_id, new.name, new.id);
+  end if;
+  return new;
+end $$;
+drop trigger if exists zz_clients_codes on public.clients;
+create trigger zz_clients_codes before insert or update on public.clients
+  for each row execute function public.clients_codes_before();
+
+-- Existing clients, oldest first (quietly, nobody is notified)
+do $$ declare r record; begin
+  if exists (select 1 from public.clients where invoice_code is null) then
+    alter table public.clients disable trigger clients_notify;
+    for r in select id from public.clients where invoice_code is null order by id loop
+      update public.clients set invoice_code = null where id = r.id;
+    end loop;
+    alter table public.clients enable trigger clients_notify;
+  end if;
+end $$;
+
+-- Company details printed on every invoice (address, email, phone, website, bank / payment details, terms)
+alter table public.app_settings add column if not exists invoice_details jsonb not null default '{}'::jsonb
+  check (jsonb_typeof(invoice_details) = 'object');
+grant update (invoice_details) on public.app_settings to authenticated;
+
+-- 16.3 Tables -----------------------------------------------------------------------------------------
+create table if not exists public.recurring_expenses (
+  id                    bigint generated always as identity primary key,
+  workspace_id          uuid not null references public.workspaces(id),
+  title                 text not null check (char_length(title) between 1 and 200),
+  category              text not null default 'tools',
+  currency              text,
+  amount_original       numeric(14, 2),
+  fx_rate               numeric(20, 10),
+  amount                numeric(12, 2) not null check (amount >= 0),
+  frequency             text not null default 'monthly' check (frequency in ('once', 'weekly', 'monthly', 'quarterly', 'yearly')),
+  next_due              date not null,
+  vendor                text,
+  payee_member          uuid references public.profiles(id) on delete set null,
+  auto_post             boolean not null default false,
+  remind_days           int not null default 3 check (remind_days between 0 and 30),
+  active                boolean not null default true,
+  notes                 text not null default '',
+  attachments           jsonb not null default '[]'::jsonb,
+  reminded_upcoming_for date,
+  reminded_due_for      date,
+  created_by            uuid references public.profiles(id) on delete set null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+create index if not exists recurring_ws_due_idx on public.recurring_expenses (workspace_id, active, next_due);
+
+create table if not exists public.expenses (
+  id              bigint generated always as identity primary key,
+  workspace_id    uuid not null references public.workspaces(id),
+  title           text not null check (char_length(title) between 1 and 200),
+  category        text not null default 'other',
+  currency        text,
+  amount_original numeric(14, 2),
+  fx_rate         numeric(20, 10),
+  amount          numeric(12, 2) not null check (amount >= 0),
+  spent_on        date not null default current_date,
+  vendor          text,
+  notes           text not null default '',
+  attachments     jsonb not null default '[]'::jsonb,
+  paid_by         uuid references public.profiles(id) on delete set null,
+  payee_member    uuid references public.profiles(id) on delete set null,
+  recurring_id    bigint references public.recurring_expenses(id) on delete set null,
+  period          date,
+  created_by      uuid references public.profiles(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists expenses_ws_spent_idx on public.expenses (workspace_id, spent_on desc);
+create index if not exists expenses_ws_category_idx on public.expenses (workspace_id, category, spent_on);
+create unique index if not exists expenses_recurring_period_uq on public.expenses (recurring_id, period) where recurring_id is not null;
+
+create table if not exists public.investments (
+  id              bigint generated always as identity primary key,
+  workspace_id    uuid not null references public.workspaces(id),
+  source          text not null check (char_length(source) between 1 and 200),
+  investor_id     uuid references public.profiles(id) on delete set null,
+  kind            text not null default 'capital' check (kind in ('capital', 'loan', 'grant', 'other')),
+  currency        text,
+  amount_original numeric(14, 2),
+  fx_rate         numeric(20, 10),
+  amount          numeric(12, 2) not null check (amount >= 0),
+  invested_on     date not null default current_date,
+  notes           text not null default '',
+  created_by      uuid references public.profiles(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists investments_ws_date_idx on public.investments (workspace_id, invested_on desc);
+
+create table if not exists public.finance_report_log (
+  workspace_id uuid not null references public.workspaces(id),
+  month        date not null,
+  created_at   timestamptz not null default now(),
+  primary key (workspace_id, month)
+);
+
+create table if not exists public.invoices (
+  id              bigint generated always as identity primary key,
+  workspace_id    uuid not null references public.workspaces(id),
+  kind            text not null default 'client' check (kind in ('client', 'business')),
+  client_id       bigint references public.clients(id) on delete cascade,
+  project_id      bigint references public.projects(id) on delete set null,
+  invoice_number  text,
+  reference_no    text,
+  description     text not null default '',
+  bill_to         jsonb not null default '{}'::jsonb check (jsonb_typeof(bill_to) = 'object'),
+  items           jsonb not null default '[]'::jsonb,
+  tax_percent     numeric(6, 2) not null default 0,
+  discount        numeric(14, 2) not null default 0,
+  notes           text not null default '',
+  billing_period  text not null default '' check (length(billing_period) <= 80),
+  currency        text,
+  amount_original numeric(14, 2),
+  fx_rate         numeric(20, 10),
+  amount          numeric(12, 2) not null check (amount >= 0),
+  issue_date      date not null default current_date,
+  due_date        date,
+  status          text not null default 'sent' check (status in ('draft', 'sent', 'paid', 'cancelled')),
+  paid_date       date,
+  issued_by       uuid references public.profiles(id) on delete set null,
+  issued_by_name  text,
+  issued_by_title text,
+  created_by      uuid references public.profiles(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  check (tax_percent between 0 and 100 and discount >= 0),
+  check ((kind = 'client') = (client_id is not null))
+);
+create index if not exists invoices_ws_idx on public.invoices (workspace_id, kind, issue_date desc);
+create index if not exists invoices_client_idx on public.invoices (client_id);
+create index if not exists invoices_project_idx on public.invoices (project_id);
+create index if not exists invoices_status_idx on public.invoices (workspace_id, status, paid_date);
+
+-- Next number per client / per workspace (written only by the database)
+create table if not exists public.invoice_counters (
+  workspace_id uuid not null references public.workspaces(id),
+  key          text not null,
+  last         int  not null default 0,
+  primary key (workspace_id, key)
+);
+
+-- Rows get their workspace from the person (or the client) that creates them
+do $$ declare d record; begin
+  for d in select * from (values
+    ('recurring_expenses', 'created_by', 'profile'), ('expenses', 'created_by', 'profile'),
+    ('investments', 'created_by', 'profile'), ('finance_report_log', 'workspace_id', 'profile'),
+    ('invoices', 'client_id', 'client')) as x(t, col, kind) loop
+    execute format('drop trigger if exists aa_ws_fill on public.%I', d.t);
+    execute format('create trigger aa_ws_fill before insert on public.%I for each row execute function public.eco_fill_workspace(%L, %L)', d.t, d.col, d.kind);
+  end loop;
+end $$;
+
+-- Invoices follow the client's project link like tasks and files do
+do $$ declare t text; begin
+  foreach t in array array['tasks', 'client_files', 'invoices'] loop
+    execute format('drop trigger if exists %I on public.%I', t || '_project_link', t);
+    execute format('create trigger %I before insert or update on public.%I for each row execute function public.project_link_before()', t || '_project_link', t);
+  end loop;
+end $$;
+
+-- 16.4 Who may do what ---------------------------------------------------------------------------------
+-- Finance permission; salaries only for the Admin / Managers
+create or replace function public.can_money(p_category text, p_action text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select perm('finance', p_action) and (p_category is distinct from 'salary' or is_manager());
+$$;
+
+-- Invoices follow the Finance permission (a Project Manager only if their role allows Finance)
+create or replace function public.can_invoice(p_client bigint, p_action text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select perm('finance', p_action) or exists (select 1 from clients c where c.id = p_client and c.workspace_id = current_workspace()
+                   and c.project_manager = auth.uid() and pm_perm('finance', p_action));
+$$;
+
+create or replace function public.can_project_invoice(p_project bigint, p_action text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select p_project is not null
+     and exists (select 1 from projects where id = p_project and workspace_id = current_workspace() and project_manager = auth.uid())
+     and pm_perm('finance', p_action);
+$$;
+
+create or replace function public.fmt_money(p numeric) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select currency from app_settings where workspace_id = current_workspace()), 'USD') || ' ' || to_char(round(coalesce(p, 0)), 'FM999,999,999,990');
+$$;
+
+create or replace function public.advance_due(p_date date, p_freq text) returns date
+language sql immutable as $$
+  select case p_freq when 'once' then p_date
+                     when 'weekly' then p_date + 7
+                     when 'quarterly' then (p_date + interval '3 months')::date
+                     when 'yearly' then (p_date + interval '1 year')::date
+                     else (p_date + interval '1 month')::date end;
+$$;
+
+-- Tells the Admin, the Managers and (unless it is about salaries) the Finance team. Not skipped for the actor:
+-- these are reminders, not "someone did something".
+create or replace function public.notify_finance_people(p_ws uuid, p_salary boolean, p_title text, p_body text, p_link text)
+returns void language plpgsql security definer set search_path = public as $$
+declare r record;
+begin
+  for r in select p.id from profiles p
+            where p.workspace_id = p_ws and p.status = 'active'
+              and (p.account_type in ('admin', 'manager')
+                   or (not p_salary and exists (select 1 from member_roles m join workspace_roles wr on wr.workspace_id = p.workspace_id and wr.role_key = m.role_key and wr.active
+                                                 where m.member_id = p.id and m.role_key = 'finance'))) loop
+    insert into notifications (workspace_id, user_id, kind, title, body, link, text)
+    values (p_ws, r.id, 'finance', left(p_title, 200), left(coalesce(p_body, ''), 500), p_link, left(p_title, 200));
+  end loop;
+end $$;
+
+-- 16.5 Money rows: validation, currency, audit ---------------------------------------------------------
+create or replace function public.finance_money_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_base text := upper(coalesce((select currency from app_settings where workspace_id = new.workspace_id), 'USD'));
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := coalesce(auth.uid(), new.created_by); new.created_at := now();
+  else
+    new.workspace_id := old.workspace_id; new.created_by := old.created_by; new.created_at := old.created_at;
+    -- an older screen changed only the converted amount: keep the original in step
+    if new.amount is distinct from old.amount and new.amount_original is not distinct from old.amount_original then
+      new.amount_original := round(new.amount / nullif(coalesce(new.fx_rate, 1), 0), 2);
+    end if;
+  end if;
+  new.updated_at := now();
+
+  -- everyone named on the row must be in this workspace
+  if tg_table_name = 'investments' then
+    if new.investor_id is not null and not exists (select 1 from profiles where id = new.investor_id and workspace_id = new.workspace_id) then
+      raise exception 'That person is not in this workspace'; end if;
+  else
+    if new.payee_member is not null and not exists (select 1 from profiles where id = new.payee_member and workspace_id = new.workspace_id) then
+      raise exception 'That person is not in this workspace'; end if;
+  end if;
+  if tg_table_name = 'expenses' then
+    if new.paid_by is not null and not exists (select 1 from profiles where id = new.paid_by and workspace_id = new.workspace_id) then
+      raise exception 'That person is not in this workspace'; end if;
+    if new.recurring_id is not null and not exists (select 1 from recurring_expenses where id = new.recurring_id and workspace_id = new.workspace_id) then
+      raise exception 'Bill not found'; end if;
+  end if;
+  if tg_table_name = 'recurring_expenses' then
+    if new.category = 'salary' and new.payee_member is null then raise exception 'Pick the team member this salary is for'; end if;
+  end if;
+
+  new.currency := upper(coalesce(nullif(trim(new.currency), ''), v_base));
+  if new.currency !~ '^[A-Z]{3}$' then raise exception 'Pick a valid currency'; end if;
+  new.amount_original := coalesce(new.amount_original, new.amount);
+  if new.amount_original is null or new.amount_original < 0 then raise exception 'Enter the amount'; end if;
+  if new.currency = v_base then
+    new.fx_rate := 1;
+  elsif new.fx_rate is null or new.fx_rate <= 0 then
+    raise exception 'Add the exchange rate from % to %', new.currency, v_base;
+  end if;
+  new.amount := round(new.amount_original * new.fx_rate, 2);
+  return new;
+end $$;
+
+create or replace function public.finance_money_after() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_who text := coalesce(member_name(auth.uid()), 'System'); v_sal boolean;
+begin
+  if tg_table_name = 'expenses' then
+    v_sal := coalesce(new.category, old.category) = 'salary';
+    if tg_op = 'INSERT' then
+      perform log_event('expense_added', 'finance', new.id::text,
+        case when v_sal then 'Recorded a salary payment' else 'Added expense "' || new.title || '" (' || fmt_money(new.amount) || ')' end);
+      if new.recurring_id is null and auth.uid() is not null and not v_sal then
+        perform notify_managers('finance', 'New expense: ' || new.title || ' ' || fmt_money(new.amount), 'By ' || v_who, '#/finance?tab=expenses');
+      end if;
+    elsif tg_op = 'UPDATE' then
+      perform log_event('expense_updated', 'finance', new.id::text, case when v_sal then 'Updated a salary payment' else 'Updated expense "' || new.title || '"' end);
+    else
+      perform log_event('expense_deleted', 'finance', old.id::text, case when v_sal then 'Deleted a salary payment' else 'Deleted expense "' || old.title || '"' end);
+    end if;
+  elsif tg_table_name = 'recurring_expenses' then
+    v_sal := coalesce(new.category, old.category) = 'salary';
+    if tg_op = 'INSERT' then
+      perform log_event('recurring_added', 'finance', new.id::text, case when v_sal then 'Added a monthly salary' else 'Added recurring bill "' || new.title || '"' end);
+    elsif tg_op = 'DELETE' then
+      perform log_event('recurring_deleted', 'finance', old.id::text, case when v_sal then 'Removed a salary' else 'Removed recurring bill "' || old.title || '"' end);
+    end if;
+  elsif tg_table_name = 'investments' then
+    if tg_op = 'INSERT' then
+      perform log_event('investment_added', 'finance', new.id::text, 'Added investment from ' || new.source || ' (' || fmt_money(new.amount) || ')');
+      perform notify_managers('finance', 'New investment: ' || fmt_money(new.amount) || ' from ' || new.source, 'By ' || v_who, '#/finance?tab=investments');
+    elsif tg_op = 'DELETE' then
+      perform log_event('investment_deleted', 'finance', old.id::text, 'Deleted investment from ' || old.source);
+    end if;
+  end if;
+  return coalesce(new, old);
+end $$;
+
+do $$ declare t text; begin
+  foreach t in array array['expenses', 'recurring_expenses', 'investments'] loop
+    execute format('drop trigger if exists %I on public.%I', t || '_before', t);
+    execute format('create trigger %I before insert or update on public.%I for each row execute function public.finance_money_before()', t || '_before', t);
+    execute format('drop trigger if exists %I on public.%I', t || '_after', t);
+    execute format('create trigger %I after insert or update or delete on public.%I for each row execute function public.finance_money_after()', t || '_after', t);
+  end loop;
+end $$;
+
+-- Attachments: only files of this very row, only PDF / images, up to 10
+create or replace function public.finance_attachments_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_prefix text := new.workspace_id::text || '/' || case when tg_table_name = 'expenses' then 'expense/' else 'bill/' end || new.id || '/'; v_item jsonb;
+begin
+  new.attachments := coalesce(new.attachments, '[]'::jsonb);
+  if jsonb_typeof(new.attachments) <> 'array' then raise exception 'Attachments are not valid'; end if;
+  if jsonb_array_length(new.attachments) > 10 then raise exception 'You can attach up to 10 files'; end if;
+  for v_item in select value from jsonb_array_elements(new.attachments) loop
+    if jsonb_typeof(v_item) <> 'object' or coalesce(v_item ->> 'path', '') not like v_prefix || '%'
+       or position('..' in v_item ->> 'path') > 0 or coalesce(trim(v_item ->> 'name'), '') = '' then
+      raise exception 'Attachments are not valid';
+    end if;
+    if coalesce(v_item ->> 'type', '') not in ('application/pdf', 'image/png', 'image/jpeg', 'image/webp') then
+      raise exception 'Attach a PDF or an image (PNG, JPG, WEBP)';
+    end if;
+  end loop;
+  return new;
+end $$;
+drop trigger if exists expenses_attachments on public.expenses;
+create trigger expenses_attachments before insert or update of attachments on public.expenses for each row execute function public.finance_attachments_check();
+drop trigger if exists recurring_attachments on public.recurring_expenses;
+create trigger recurring_attachments before insert or update of attachments on public.recurring_expenses for each row execute function public.finance_attachments_check();
+
+-- Storage: <workspace>/expense/<id>/<file> or <workspace>/bill/<id>/<file> -> the same rule as the row itself
+create or replace function public.can_finance_file(p_name text, p_action text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare p text[] := string_to_array(coalesce(p_name, ''), '/'); v_cat text;
+begin
+  if array_length(p, 1) <> 4 or p[1] is distinct from current_workspace()::text or p[3] !~ '^\d{1,18}$' or p[4] = '' then return false; end if;
+  if p[2] = 'expense' then select category into v_cat from expenses where id = p[3]::bigint and workspace_id = current_workspace();
+  elsif p[2] = 'bill' then select category into v_cat from recurring_expenses where id = p[3]::bigint and workspace_id = current_workspace();
+  else return false; end if;
+  if not found then return false; end if;
+  return can_money(v_cat, p_action);
+end $$;
+
+-- 16.6 Bills: pay / skip ---------------------------------------------------------------------------------
+-- Internal: records the expense for the bill's current due date (in the bill's currency) and moves it on
+create or replace function public.recurring_post(p_id bigint, p_amount numeric, p_paid_on date) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare r recurring_expenses%rowtype; v_id bigint;
+begin
+  select * into r from recurring_expenses where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Bill not found'; end if;
+  insert into expenses (workspace_id, title, category, currency, amount_original, fx_rate, amount, spent_on, vendor, payee_member, recurring_id, period, notes)
+  values (r.workspace_id, r.title, r.category, r.currency, coalesce(p_amount, r.amount_original, r.amount), r.fx_rate,
+          round(coalesce(p_amount, r.amount_original, r.amount) * coalesce(r.fx_rate, 1), 2),
+          coalesce(p_paid_on, r.next_due), r.vendor, r.payee_member, r.id, r.next_due,
+          case r.frequency when 'once' then 'One-time payment' when 'monthly' then 'For ' || to_char(r.next_due, 'Mon YYYY') else 'Due ' || to_char(r.next_due, 'DD Mon YYYY') end)
+  on conflict (recurring_id, period) where recurring_id is not null do nothing
+  returning id into v_id;
+  if r.frequency = 'once' then
+    update recurring_expenses set active = false where id = p_id;      -- paying a one-time bill closes it
+  else
+    update recurring_expenses set next_due = advance_due(r.next_due, r.frequency) where id = p_id;
+  end if;
+  return v_id;
+end $$;
+
+create or replace function public.recurring_mark_paid(p_id bigint, p_amount numeric default null, p_paid_on date default null, p_fx_rate numeric default null) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); r recurring_expenses%rowtype; v_id bigint;
+begin
+  select * into r from recurring_expenses where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Bill not found'; end if;
+  if not can_money(r.category, 'edit') then raise exception 'You don''t have permission to record this payment'; end if;
+  if p_amount is not null and p_amount < 0 then raise exception 'Amount can''t be negative'; end if;
+  if p_fx_rate is not null then
+    if p_fx_rate <= 0 then raise exception 'The exchange rate must be above zero'; end if;
+    update recurring_expenses set fx_rate = p_fx_rate where id = p_id;
+  end if;
+  v_id := recurring_post(p_id, p_amount, coalesce(p_paid_on, (now() at time zone app_tz())::date));
+  perform log_event('recurring_paid', 'finance', p_id::text,
+    case when r.category = 'salary' then 'Paid salary of ' || coalesce(member_name(r.payee_member), 'a member') || ' for ' || to_char(r.next_due, 'Mon YYYY')
+         else 'Paid "' || r.title || '" due ' || to_char(r.next_due, 'DD Mon YYYY') end);
+  return v_id;
+end $$;
+
+create or replace function public.recurring_skip(p_id bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); r recurring_expenses%rowtype;
+begin
+  select * into r from recurring_expenses where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Bill not found'; end if;
+  if not can_money(r.category, 'edit') then raise exception 'You don''t have permission to change this bill'; end if;
+  if r.frequency = 'once' then raise exception 'A one-time bill can''t be skipped. Delete it instead.'; end if;
+  update recurring_expenses set next_due = advance_due(r.next_due, r.frequency) where id = p_id;
+  perform log_event('recurring_skipped', 'finance', p_id::text, 'Skipped ' || case when r.category = 'salary' then 'a salary' else '"' || r.title || '"' end || ' due ' || to_char(r.next_due, 'DD Mon YYYY'));
+end $$;
+
+-- 16.7 Reminders, auto charges and the monthly report notice --------------------------------------------
+-- Safe to call any number of times (the app calls it when someone opens it); each step happens once.
+create or replace function public.finance_sweep() returns int
+language plpgsql security definer set search_path = public as $$
+declare r recurring_expenses%rowtype; v_ws uuid := current_workspace(); v_today date := (now() at time zone app_tz())::date; n int := 0; g int;
+        v_sal boolean; v_label text; v_prev date; v_rev numeric; v_exp numeric; v_link text := '#/finance?tab=recurring';
+begin
+  if auth.uid() is not null then perform assert_active(); end if;
+  if v_ws is null then return 0; end if;
+  perform pg_advisory_xact_lock(hashtext('webnox_finance_sweep:' || v_ws::text));
+  for r in select * from recurring_expenses where workspace_id = v_ws and active and next_due <= v_today + remind_days order by next_due loop
+    v_sal := r.category = 'salary';
+    v_label := case when v_sal then 'Salary: ' || coalesce(member_name(r.payee_member), r.title) else r.title end;
+    if r.auto_post and r.next_due <= v_today then
+      g := 0;
+      while r.next_due <= v_today and r.active and g < 24 loop
+        perform recurring_post(r.id, null, r.next_due);
+        perform notify_finance_people(v_ws, v_sal, 'Charged: ' || v_label || ' ' || fmt_money(r.amount),
+          'Recorded as an expense for ' || to_char(r.next_due, 'DD Mon YYYY'), '#/finance?tab=expenses');
+        select * into r from recurring_expenses where id = r.id;
+        g := g + 1; n := n + 1;
+      end loop;
+    elsif r.next_due <= v_today then
+      if r.reminded_due_for is distinct from r.next_due then
+        perform notify_finance_people(v_ws, v_sal, case when r.next_due < v_today then 'Overdue: ' else 'Due today: ' end || v_label || ' ' || fmt_money(r.amount),
+          'Was due ' || to_char(r.next_due, 'DD Mon YYYY') || '. Mark it paid in Finance.', v_link);
+        update recurring_expenses set reminded_due_for = r.next_due where id = r.id;
+        n := n + 1;
+      end if;
+    elsif r.reminded_upcoming_for is distinct from r.next_due then
+      perform notify_finance_people(v_ws, v_sal, 'Coming up: ' || v_label || ' ' || fmt_money(r.amount),
+        'Due ' || to_char(r.next_due, 'DD Mon YYYY') || ' (in ' || (r.next_due - v_today) || ' days)' || case when r.auto_post then '. Charged automatically.' else '' end, v_link);
+      update recurring_expenses set reminded_upcoming_for = r.next_due where id = r.id;
+      n := n + 1;
+    end if;
+  end loop;
+
+  -- Last month's report, once, if there is any money data at all
+  v_prev := (date_trunc('month', v_today) - interval '1 month')::date;
+  if not exists (select 1 from finance_report_log where workspace_id = v_ws and month = v_prev)
+     and (exists (select 1 from expenses where workspace_id = v_ws) or exists (select 1 from invoices where workspace_id = v_ws)
+          or exists (select 1 from investments where workspace_id = v_ws)) then
+    insert into finance_report_log (workspace_id, month) values (v_ws, v_prev) on conflict do nothing;
+    select coalesce(sum(amount), 0) into v_rev from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= v_prev and paid_date < (v_prev + interval '1 month')::date;
+    select coalesce(sum(amount), 0) into v_exp from expenses where workspace_id = v_ws and spent_on >= v_prev and spent_on < (v_prev + interval '1 month')::date;
+    perform notify_finance_people(v_ws, false, 'Finance report ready: ' || to_char(v_prev, 'FMMonth YYYY'),
+      'Revenue ' || fmt_money(v_rev) || ', expenses ' || fmt_money(v_exp) || ', ' || case when v_rev - v_exp >= 0 then 'profit ' else 'loss ' end || fmt_money(abs(v_rev - v_exp)),
+      '#/finance?tab=report&month=' || to_char(v_prev, 'YYYY-MM'));
+    n := n + 1;
+  end if;
+  return n;
+end $$;
+
+-- 16.8 Numbers for the dashboards and the monthly report -------------------------------------------------
+create or replace function public.finance_overview() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_ws uuid := current_workspace(); v_today date := (now() at time zone app_tz())::date; v_m date; v_sal boolean := is_manager(); r jsonb;
+        v_inv numeric; v_rev numeric; v_exp numeric; v_burn numeric;
+begin
+  if not perm('finance', 'view') then raise exception 'You don''t have access to finance'; end if;
+  v_m := date_trunc('month', v_today)::date;
+  select coalesce(sum(amount), 0) into v_inv from investments where workspace_id = v_ws;
+  select coalesce(sum(amount), 0) into v_rev from invoices where workspace_id = v_ws and status = 'paid';
+  select coalesce(sum(amount), 0) into v_exp from expenses where workspace_id = v_ws and (v_sal or category <> 'salary');
+  select coalesce(sum(amount), 0) / 3 into v_burn from expenses where workspace_id = v_ws and (v_sal or category <> 'salary')
+     and spent_on >= (v_m - interval '3 months')::date and spent_on < v_m;
+  select jsonb_build_object(
+    'currency', (select currency from app_settings where workspace_id = v_ws),
+    'month', to_char(v_m, 'YYYY-MM'),
+    'revenue_month', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= v_m), 0),
+    'expenses_month', coalesce((select sum(amount) from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_m), 0),
+    'revenue_last', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= (v_m - interval '1 month')::date and paid_date < v_m), 0),
+    'expenses_last', coalesce((select sum(amount) from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= (v_m - interval '1 month')::date and spent_on < v_m), 0),
+    'invested_total', v_inv, 'revenue_total', v_rev, 'expenses_total', v_exp, 'cash', v_inv + v_rev - v_exp,
+    'burn', round(v_burn, 2), 'runway_months', case when v_burn > 0 then round((v_inv + v_rev - v_exp) / v_burn, 1) end,
+    'outstanding', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'sent'), 0),
+    'monthly_fixed', coalesce((select sum(case frequency when 'weekly' then amount * 52 / 12 when 'quarterly' then amount / 3 when 'yearly' then amount / 12 when 'once' then 0 else amount end)
+                                 from recurring_expenses where workspace_id = v_ws and active and (v_sal or category <> 'salary')), 0),
+    'salaries_monthly', case when v_sal then coalesce((select sum(case frequency when 'weekly' then amount * 52 / 12 when 'quarterly' then amount / 3 when 'yearly' then amount / 12 when 'once' then 0 else amount end)
+                                 from recurring_expenses where workspace_id = v_ws and active and category = 'salary'), 0) end,
+    'months', (select coalesce(jsonb_agg(jsonb_build_object('month', to_char(m, 'YYYY-MM'),
+                 'revenue', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= m and paid_date < m + interval '1 month'), 0),
+                 'expenses', coalesce((select sum(amount) from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= m and spent_on < m + interval '1 month'), 0)) order by m), '[]'::jsonb)
+               from generate_series(v_m - interval '11 months', v_m, interval '1 month') m),
+    'by_category', (select coalesce(jsonb_agg(jsonb_build_object('category', category, 'total', t) order by t desc), '[]'::jsonb)
+               from (select category, sum(amount) t from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_m group by category) x),
+    'upcoming', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'title', case when category = 'salary' then 'Salary: ' || coalesce(member_name(payee_member), title) else title end,
+                 'category', category, 'amount', amount, 'next_due', next_due, 'auto_post', auto_post) order by next_due), '[]'::jsonb)
+               from recurring_expenses where workspace_id = v_ws and active and next_due <= v_today + 30 and (category <> 'salary' or v_sal))
+  ) into r;
+  return r;
+end $$;
+
+create or replace function public.finance_report(p_month date) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_ws uuid := current_workspace(); v_from date := date_trunc('month', p_month)::date; v_to date; v_prev date; v_sal boolean := is_manager(); r jsonb;
+        v_rev numeric; v_exp numeric;
+begin
+  if not perm('finance', 'view') then raise exception 'You don''t have access to finance'; end if;
+  v_to := (v_from + interval '1 month')::date; v_prev := (v_from - interval '1 month')::date;
+  select coalesce(sum(amount), 0) into v_rev from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= v_from and paid_date < v_to;
+  select coalesce(sum(amount), 0) into v_exp from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_from and spent_on < v_to;
+  select jsonb_build_object(
+    'month', to_char(v_from, 'YYYY-MM'), 'currency', (select currency from app_settings where workspace_id = v_ws), 'show_salaries', v_sal,
+    'revenue', v_rev, 'expenses', v_exp, 'net', v_rev - v_exp,
+    'salaries', case when v_sal then coalesce((select sum(amount) from expenses where workspace_id = v_ws and category = 'salary' and spent_on >= v_from and spent_on < v_to), 0) else 0 end,
+    'invoiced', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status in ('sent', 'paid') and issue_date >= v_from and issue_date < v_to), 0),
+    'investments', coalesce((select sum(amount) from investments where workspace_id = v_ws and invested_on >= v_from and invested_on < v_to), 0),
+    'cash_end', coalesce((select sum(amount) from investments where workspace_id = v_ws and invested_on < v_to), 0)
+              + coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date < v_to), 0)
+              - coalesce((select sum(amount) from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on < v_to), 0),
+    'prev', jsonb_build_object(
+      'revenue', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= v_prev and paid_date < v_from), 0),
+      'expenses', coalesce((select sum(amount) from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_prev and spent_on < v_from), 0)),
+    'by_category', (select coalesce(jsonb_agg(jsonb_build_object('category', category, 'total', t, 'count', c) order by t desc), '[]'::jsonb)
+               from (select category, sum(amount) t, count(*) c from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_from and spent_on < v_to group by category) x),
+    'expense_rows', (select coalesce(jsonb_agg(jsonb_build_object('title', title, 'category', category, 'amount', amount, 'spent_on', spent_on, 'vendor', vendor,
+                 'payee', case when v_sal then member_name(payee_member) end) order by spent_on, id), '[]'::jsonb)
+               from expenses where workspace_id = v_ws and (v_sal or category <> 'salary') and spent_on >= v_from and spent_on < v_to),
+    'revenue_rows', (select coalesce(jsonb_agg(jsonb_build_object('client', coalesce(c.name, nullif(i.bill_to ->> 'company', ''), i.bill_to ->> 'name'), 'kind', i.kind,
+                 'invoice', coalesce(i.invoice_number, '#' || i.id), 'amount', i.amount, 'paid_date', i.paid_date) order by i.paid_date), '[]'::jsonb)
+               from invoices i left join clients c on c.id = i.client_id where i.workspace_id = v_ws and i.status = 'paid' and i.paid_date >= v_from and i.paid_date < v_to),
+    'investment_rows', (select coalesce(jsonb_agg(jsonb_build_object('source', source, 'kind', kind, 'amount', amount, 'invested_on', invested_on) order by invested_on), '[]'::jsonb)
+               from investments where workspace_id = v_ws and invested_on >= v_from and invested_on < v_to)
+  ) into r;
+  return r;
+end $$;
+
+-- The business numbers on the Admin / Manager dashboard
+create or replace function public.business_summary() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_ws uuid := current_workspace(); v_tz text := app_tz(); v_today date := (now() at time zone app_tz())::date; v_month date; r jsonb;
+begin
+  if not (perm('finance', 'view') or is_manager()) then raise exception 'You don''t have access to finance'; end if;
+  v_month := date_trunc('month', v_today)::date;
+  select jsonb_build_object(
+    'currency', (select currency from app_settings where workspace_id = v_ws),
+    'revenue_month', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= v_month), 0),
+    'revenue_last_month', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= (v_month - interval '1 month')::date and paid_date < v_month), 0),
+    'revenue_total', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid'), 0),
+    'outstanding', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'sent'), 0),
+    'overdue_count', (select count(*) from invoices where workspace_id = v_ws and status = 'sent' and due_date < v_today),
+    'overdue_amount', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'sent' and due_date < v_today), 0),
+    'mrr', coalesce((select sum(monthly_retainer) from clients where workspace_id = v_ws and status in ('onboarding', 'active')), 0),
+    'active_clients', (select count(*) from clients where workspace_id = v_ws and status in ('onboarding', 'active')),
+    'leads_open', (select count(*) from leads where workspace_id = v_ws and status not in ('won', 'lost')),
+    'leads_month', (select count(*) from leads where workspace_id = v_ws and (created_at at time zone v_tz)::date >= v_month),
+    'won_month', (select count(*) from leads where workspace_id = v_ws and status = 'won' and (won_at at time zone v_tz)::date >= v_month),
+    'months', (select coalesce(jsonb_agg(jsonb_build_object('month', to_char(m, 'YYYY-MM'),
+                 'revenue', coalesce((select sum(amount) from invoices where workspace_id = v_ws and status = 'paid' and paid_date >= m and paid_date < m + interval '1 month'), 0)) order by m), '[]'::jsonb)
+                 from generate_series(v_month - interval '11 months', v_month, interval '1 month') m)
+  ) into r;
+  return r;
+end $$;
+
+-- 16.9 Invoices: numbers, totals, currency, audit -------------------------------------------------------
+-- Runs after the project link (alphabetical trigger order): number, totals, currency, issuer
+create or replace function public.invoices_details_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_base text := upper(coalesce((select currency from app_settings where workspace_id = new.workspace_id), 'USD'));
+        v_item jsonb; v_sub numeric := 0; v_code text; v_seq int; v_qty numeric; v_rate numeric;
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := coalesce(auth.uid(), new.created_by); new.created_at := now();
+  else
+    new.workspace_id := old.workspace_id; new.created_by := old.created_by; new.created_at := old.created_at;
+    new.kind := old.kind;
+    new.invoice_number := coalesce(old.invoice_number, new.invoice_number);
+    new.reference_no := old.reference_no;
+    new.issued_by := old.issued_by; new.issued_by_name := old.issued_by_name; new.issued_by_title := old.issued_by_title;
+  end if;
+  new.updated_at := now();
+  if new.status = 'paid' and new.paid_date is null then new.paid_date := (now() at time zone app_tz())::date; end if;
+  if new.status <> 'paid' then new.paid_date := null; end if;
+
+  new.kind := coalesce(new.kind, 'client');
+  if new.kind = 'business' then
+    new.client_id := null; new.project_id := null;
+    new.bill_to := coalesce(new.bill_to, '{}'::jsonb);
+    if coalesce(trim(new.bill_to ->> 'name'), '') = '' then raise exception 'Enter who this invoice is for'; end if;
+  elsif new.client_id is null then
+    raise exception 'Choose a client';
+  elsif not exists (select 1 from clients where id = new.client_id and workspace_id = new.workspace_id) then
+    raise exception 'Client not found';
+  end if;
+
+  -- line items -> total (discount first, then tax)
+  new.items := coalesce(new.items, '[]'::jsonb);
+  if jsonb_typeof(new.items) <> 'array' then raise exception 'Line items are not valid'; end if;
+  if jsonb_array_length(new.items) > 100 then raise exception 'An invoice can have up to 100 lines'; end if;
+  new.tax_percent := coalesce(new.tax_percent, 0); new.discount := coalesce(new.discount, 0);
+  if jsonb_array_length(new.items) > 0 then
+    for v_item in select value from jsonb_array_elements(new.items) loop
+      if jsonb_typeof(v_item) <> 'object' or coalesce(trim(v_item ->> 'description'), '') = '' then raise exception 'Every line needs a description'; end if;
+      v_qty := coalesce(nullif(v_item ->> 'qty', '')::numeric, 1); v_rate := coalesce(nullif(v_item ->> 'rate', '')::numeric, 0);
+      if v_qty < 0 or v_rate < 0 then raise exception 'Quantity and price can''t be negative'; end if;
+      v_sub := v_sub + round(v_qty * v_rate, 2);
+    end loop;
+    if new.discount > v_sub then raise exception 'The discount is more than the invoice total'; end if;
+    new.amount_original := round((v_sub - new.discount) * (1 + new.tax_percent / 100), 2);
+    if coalesce(trim(new.description), '') = '' then new.description := left(new.items -> 0 ->> 'description', 300); end if;
+  elsif tg_op = 'UPDATE' and new.amount is distinct from old.amount and new.amount_original is not distinct from old.amount_original then
+    new.amount_original := round(new.amount / nullif(coalesce(new.fx_rate, 1), 0), 2);
+  end if;
+
+  -- currency: amount = converted to the workspace currency, used in every total
+  new.currency := upper(coalesce(nullif(trim(new.currency), ''), v_base));
+  if new.currency !~ '^[A-Z]{3}$' then raise exception 'Pick a valid currency'; end if;
+  new.amount_original := coalesce(new.amount_original, new.amount);
+  if new.amount_original is null or new.amount_original < 0 then raise exception 'Enter the amount'; end if;
+  if new.currency = v_base then new.fx_rate := 1;
+  elsif new.fx_rate is null or new.fx_rate <= 0 then raise exception 'Add the exchange rate from % to %', new.currency, v_base;
+  end if;
+  new.amount := round(new.amount_original * new.fx_rate, 2);
+
+  if tg_op = 'INSERT' then
+    new.issue_date := coalesce(new.issue_date, (now() at time zone app_tz())::date);
+    new.issued_by := coalesce(auth.uid(), new.issued_by, new.created_by);
+    new.issued_by_name := coalesce(member_name(new.issued_by), new.issued_by_name);
+    new.issued_by_title := coalesce(issuer_title(new.issued_by), new.issued_by_title);
+    if coalesce(trim(new.invoice_number), '') = '' then
+      if new.kind = 'business' then
+        insert into invoice_counters (workspace_id, key, last) values (new.workspace_id, 'business', 1)
+          on conflict (workspace_id, key) do update set last = invoice_counters.last + 1 returning last into v_seq;
+        new.invoice_number := 'INV-' || name_initials((select company_name from app_settings where workspace_id = new.workspace_id)) || num_pad(v_seq, 3);
+      else
+        select invoice_code into v_code from clients where id = new.client_id;
+        insert into invoice_counters (workspace_id, key, last) values (new.workspace_id, 'client:' || new.client_id, 1)
+          on conflict (workspace_id, key) do update set last = invoice_counters.last + 1 returning last into v_seq;
+        new.invoice_number := 'INV-BUID-' || coalesce(v_code, 'CL') || num_pad(v_seq, 3);
+      end if;
+    end if;
+    new.reference_no := 'REF-' || to_char(new.issue_date, 'YYMMDD') || '-' || num_pad(new.id, 4);
+  end if;
+  return new;
+end $$;
+drop trigger if exists invoices_x_details on public.invoices;
+create trigger invoices_x_details before insert or update on public.invoices
+  for each row execute function public.invoices_details_before();
+
+-- What the next number will be (shown on the form before saving)
+create or replace function public.invoice_next_number(p_kind text, p_client bigint default null) returns text
+language plpgsql stable security definer set search_path = public as $$
+declare v_ws uuid := current_workspace(); v_code text; v_last int;
+begin
+  if not perm('finance', 'edit') and not (p_client is not null and can_invoice(p_client, 'edit')) then
+    raise exception 'You don''t have permission to add invoices';
+  end if;
+  if p_kind = 'business' then
+    select last into v_last from invoice_counters where workspace_id = v_ws and key = 'business';
+    return 'INV-' || name_initials((select company_name from app_settings where workspace_id = v_ws)) || num_pad(coalesce(v_last, 0) + 1, 3);
+  end if;
+  select invoice_code into v_code from clients where id = p_client and workspace_id = v_ws;
+  if v_code is null then return null; end if;
+  select last into v_last from invoice_counters where workspace_id = v_ws and key = 'client:' || p_client;
+  return 'INV-BUID-' || v_code || num_pad(coalesce(v_last, 0) + 1, 3);
+end $$;
+
+-- Who the invoice is for (the client's name or the typed name)
+create or replace function public.invoice_party(p_client bigint, p_bill_to jsonb) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select name from clients where id = p_client and workspace_id = current_workspace()),
+                  nullif(trim(p_bill_to ->> 'company'), ''), nullif(trim(p_bill_to ->> 'name'), ''), 'business invoice');
+$$;
+
+create or replace function public.invoices_log_after() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_party text := invoice_party(coalesce(new.client_id, old.client_id), coalesce(new.bill_to, old.bill_to));
+        v_type text := case when coalesce(new.kind, old.kind) = 'business' then 'finance' else 'client' end;
+        v_eid text := coalesce(new.client_id, old.client_id, new.id, old.id)::text;
+begin
+  if tg_op = 'INSERT' then
+    perform log_event('invoice_created', v_type, v_eid,
+      'Added invoice ' || coalesce(new.invoice_number, '#' || new.id) || ' for ' || v_party || ' (' || new.currency || ' ' || new.amount_original || ')');
+  elsif tg_op = 'UPDATE' and new.status is distinct from old.status then
+    perform log_event(case when new.status = 'paid' then 'invoice_paid' else 'invoice_updated' end, v_type, v_eid,
+      'Invoice ' || coalesce(new.invoice_number, '#' || new.id) || ' for ' || v_party || ' is ' || new.status);
+  elsif tg_op = 'DELETE' then
+    perform log_event('invoice_deleted', v_type, v_eid, 'Deleted invoice ' || coalesce(old.invoice_number, '#' || old.id));
+  end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists invoices_after on public.invoices;
+create trigger invoices_after after insert or update or delete on public.invoices
+  for each row execute function public.invoices_log_after();
+
+-- Notifications: the Admin, Managers, the Finance role and (for a client invoice of their project) the Project Manager
+create or replace function public.finance_notify() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_party text; v_title text; v_who text := coalesce(member_name(auth.uid()), 'System'); v_pm uuid; v_tab text;
+        v_amt text := coalesce(new.currency, old.currency, '') || ' ' || coalesce(new.amount_original, new.amount, old.amount_original, old.amount);
+begin
+  if tg_op = 'UPDATE' and (to_jsonb(new) - 'project_id' - 'updated_at') = (to_jsonb(old) - 'project_id' - 'updated_at') then return new; end if;
+  v_party := invoice_party(coalesce(new.client_id, old.client_id), coalesce(new.bill_to, old.bill_to));
+  v_tab := case when coalesce(new.kind, old.kind) = 'business' then 'biz-invoices' else 'invoices' end;
+  v_title := case
+    when tg_op = 'INSERT' then 'New invoice for ' || v_party || ': ' || v_amt || coalesce(' (' || new.invoice_number || ')', '')
+    when tg_op = 'DELETE' then 'Invoice deleted for ' || v_party
+    when new.status = 'paid' and old.status <> 'paid' then 'Invoice paid by ' || v_party || ': ' || v_amt
+    else 'Invoice updated for ' || v_party end;
+  perform notify_managers('finance', v_title, 'By ' || v_who, '#/finance?tab=' || v_tab);
+  perform notify_role('finance', 'finance', v_title, 'By ' || v_who, '#/finance?tab=' || v_tab);
+  select project_manager into v_pm from projects where id = coalesce(new.project_id, old.project_id);
+  if v_pm is not null and not is_manager_id(v_pm) and not exists (select 1 from member_roles where member_id = v_pm and role_key = 'finance') then
+    perform notify(v_pm, 'finance', v_title, 'By ' || v_who, '#/projects?open=' || coalesce(new.project_id, old.project_id) || '&tab=invoices');
+  end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists invoices_notify on public.invoices;
+create trigger invoices_notify after insert or update or delete on public.invoices
+  for each row execute function public.finance_notify();
+
+-- 16.10 Row Level Security ---------------------------------------------------------------------------------
+alter table public.recurring_expenses enable row level security;
+alter table public.expenses           enable row level security;
+alter table public.investments        enable row level security;
+alter table public.finance_report_log enable row level security;
+alter table public.invoices           enable row level security;
+alter table public.invoice_counters   enable row level security;
+
+do $$ declare t text; begin
+  foreach t in array array['recurring_expenses', 'expenses', 'investments', 'finance_report_log', 'invoices', 'invoice_counters'] loop
+    execute format('drop policy if exists tenant_isolation on public.%I', t);
+    execute format('create policy tenant_isolation on public.%I as restrictive for all to authenticated
+                      using (workspace_id = (select public.current_workspace()))
+                      with check (workspace_id = (select public.current_workspace()))', t);
+  end loop;
+  foreach t in array array['expenses', 'recurring_expenses'] loop
+    execute format('drop policy if exists %I on public.%I', t || '_read', t);
+    execute format('create policy %I on public.%I for select to authenticated using (public.can_money(category, ''view''))', t || '_read', t);
+    execute format('drop policy if exists %I on public.%I', t || '_insert', t);
+    execute format('create policy %I on public.%I for insert to authenticated with check (public.can_money(category, ''edit''))', t || '_insert', t);
+    execute format('drop policy if exists %I on public.%I', t || '_update', t);
+    execute format('create policy %I on public.%I for update to authenticated using (public.can_money(category, ''edit'')) with check (public.can_money(category, ''edit''))', t || '_update', t);
+    execute format('drop policy if exists %I on public.%I', t || '_delete', t);
+    execute format('create policy %I on public.%I for delete to authenticated using (public.can_money(category, ''delete''))', t || '_delete', t);
+  end loop;
+end $$;
+
+drop policy if exists investments_read on public.investments;
+create policy investments_read on public.investments for select to authenticated using ((select public.perm('finance', 'view')));
+drop policy if exists investments_insert on public.investments;
+create policy investments_insert on public.investments for insert to authenticated with check ((select public.perm('finance', 'edit')));
+drop policy if exists investments_update on public.investments;
+create policy investments_update on public.investments for update to authenticated
+  using ((select public.perm('finance', 'edit'))) with check ((select public.perm('finance', 'edit')));
+drop policy if exists investments_delete on public.investments;
+create policy investments_delete on public.investments for delete to authenticated using ((select public.perm('finance', 'delete')));
+
+-- A business invoice (no client) is for the Finance side only; a client invoice also for the project's Project Manager
+drop policy if exists invoices_read on public.invoices;
+create policy invoices_read on public.invoices for select to authenticated
+  using (public.can_invoice(client_id, 'view') or public.can_project_invoice(project_id, 'view'));
+drop policy if exists invoices_insert on public.invoices;
+create policy invoices_insert on public.invoices for insert to authenticated
+  with check (public.can_invoice(client_id, 'edit') or public.can_project_invoice(project_id, 'edit'));
+drop policy if exists invoices_update on public.invoices;
+create policy invoices_update on public.invoices for update to authenticated
+  using (public.can_invoice(client_id, 'edit') or public.can_project_invoice(project_id, 'edit'))
+  with check (public.can_invoice(client_id, 'edit') or public.can_project_invoice(project_id, 'edit'));
+drop policy if exists invoices_delete on public.invoices;
+create policy invoices_delete on public.invoices for delete to authenticated
+  using (public.can_invoice(client_id, 'delete') or public.can_project_invoice(project_id, 'delete'));
+
+revoke all on public.recurring_expenses, public.expenses, public.investments, public.finance_report_log,
+              public.invoices, public.invoice_counters from anon, authenticated;
+grant select, insert, delete on public.expenses, public.recurring_expenses, public.investments, public.invoices to authenticated;
+grant update (title, category, currency, amount_original, fx_rate, amount, spent_on, vendor, notes, attachments, paid_by, payee_member) on public.expenses to authenticated;
+grant update (title, category, currency, amount_original, fx_rate, amount, frequency, next_due, vendor, payee_member, auto_post, remind_days, active, notes, attachments) on public.recurring_expenses to authenticated;
+grant update (source, investor_id, kind, currency, amount_original, fx_rate, amount, invested_on, notes) on public.investments to authenticated;
+grant update (client_id, project_id, description, bill_to, items, tax_percent, discount, notes, billing_period, currency, amount_original, fx_rate, amount,
+              issue_date, due_date, status, paid_date) on public.invoices to authenticated;
+
+-- 16.11 Storage for receipts and bills -----------------------------------------------------------------------
+do $$ begin
+  if exists (select 1 from pg_namespace where nspname = 'storage') then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('finance-files', 'finance-files', false, 10485760, array['application/pdf', 'image/png', 'image/jpeg', 'image/webp'])
+    on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+    execute 'drop policy if exists "finance files read" on storage.objects';
+    execute 'create policy "finance files read" on storage.objects for select to authenticated using (bucket_id = ''finance-files'' and public.can_finance_file(name, ''view''))';
+    execute 'drop policy if exists "finance files upload" on storage.objects';
+    execute 'create policy "finance files upload" on storage.objects for insert to authenticated with check (bucket_id = ''finance-files'' and public.can_finance_file(name, ''edit''))';
+    execute 'drop policy if exists "finance files delete" on storage.objects';
+    execute 'create policy "finance files delete" on storage.objects for delete to authenticated using (bucket_id = ''finance-files'' and public.can_finance_file(name, ''edit''))';
+  end if;
+end $$;
+
+-- 16.12 Deleting a workspace also removes this data ------------------------------------------------------------
+create or replace function public.purge_workspace(p_id uuid) returns uuid[]
+language plpgsql security definer set search_path = public as $$
+declare ids uuid[];
+begin
+  perform set_config('webnox.purge', 'on', true);
+  select coalesce(array_agg(id), '{}') into ids from public.profiles where workspace_id = p_id and is_master = false;
+  delete from public.activity_logs        where workspace_id = p_id;
+  delete from public.activity_intervals   where workspace_id = p_id;
+  delete from public.user_sessions        where workspace_id = p_id;
+  delete from public.task_time_entries    where workspace_id = p_id;
+  delete from public.task_comments        where workspace_id = p_id;
+  delete from public.tasks                where workspace_id = p_id;
+  delete from public.invoices             where workspace_id = p_id;
+  delete from public.invoice_counters     where workspace_id = p_id;
+  delete from public.expenses             where workspace_id = p_id;
+  delete from public.recurring_expenses   where workspace_id = p_id;
+  delete from public.investments          where workspace_id = p_id;
+  delete from public.finance_report_log   where workspace_id = p_id;
+  delete from public.client_files         where workspace_id = p_id;
+  delete from public.request_comments     where workspace_id = p_id;
+  delete from public.staffing_request_items where workspace_id = p_id;
+  delete from public.staffing_requests    where workspace_id = p_id;
+  delete from public.project_members      where workspace_id = p_id;
+  delete from public.project_requirements where workspace_id = p_id;
+  delete from public.projects             where workspace_id = p_id;
+  delete from public.leads                where workspace_id = p_id;
+  delete from public.clients              where workspace_id = p_id;
+  delete from public.role_permissions     where workspace_id = p_id;
+  delete from public.app_settings         where workspace_id = p_id;
+  delete from public.notifications        where workspace_id = p_id;
+  delete from public.workspace_roles      where workspace_id = p_id;
+  delete from public.subscription_payments where workspace_id = p_id;
+  delete from public.subscriptions        where workspace_id = p_id;
+  delete from public.billing_log          where workspace_id = p_id;
+  delete from public.master_access_log    where workspace_id = p_id;
+  delete from public.profiles             where workspace_id = p_id and is_master = false;
+  delete from public.workspaces           where id = p_id;
+  return ids;
+end $$;
+revoke all on function public.purge_workspace(uuid) from public, anon, authenticated;
+
+-- 16.13 Functions: who may call what ---------------------------------------------------------------------------
+revoke execute on function
+  public.invoice_initials(uuid, text, bigint), public.clients_codes_before(), public.invoices_details_before(),
+  public.invoices_log_after(), public.finance_notify(), public.finance_money_before(), public.finance_money_after(),
+  public.finance_attachments_check(), public.notify_finance_people(uuid, boolean, text, text, text), public.recurring_post(bigint, numeric, date),
+  public.is_manager_id(uuid)
+  from public, anon, authenticated;
+revoke execute on function
+  public.num_pad(bigint, int), public.name_initials(text), public.issuer_title(uuid), public.can_money(text, text), public.can_invoice(bigint, text),
+  public.can_project_invoice(bigint, text), public.fmt_money(numeric), public.advance_due(date, text), public.can_finance_file(text, text),
+  public.recurring_mark_paid(bigint, numeric, date, numeric), public.recurring_skip(bigint), public.finance_sweep(), public.finance_overview(),
+  public.finance_report(date), public.business_summary(), public.invoice_next_number(text, bigint), public.invoice_party(bigint, jsonb)
+  from public, anon;
+grant execute on function
+  public.num_pad(bigint, int), public.name_initials(text), public.issuer_title(uuid), public.can_money(text, text), public.can_invoice(bigint, text),
+  public.can_project_invoice(bigint, text), public.fmt_money(numeric), public.advance_due(date, text), public.can_finance_file(text, text),
+  public.recurring_mark_paid(bigint, numeric, date, numeric), public.recurring_skip(bigint), public.finance_sweep(), public.finance_overview(),
+  public.finance_report(date), public.business_summary(), public.invoice_next_number(text, bigint), public.invoice_party(bigint, jsonb)
+  to authenticated;

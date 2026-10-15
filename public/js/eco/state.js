@@ -28,9 +28,9 @@ export function computePerms() {
       const sw = state.roleSwitches[r.role_key];
       if (!sw || !sw.active) continue;                        // the Master switched this role off
       const target = r.role_key === 'project_manager' ? pm : p;
-      target.view ||= r.can_view;
-      target.edit ||= r.can_edit && sw.can_edit;              // edit / delete also need the Master's "allow to edit"
-      target.delete ||= r.can_delete && sw.can_edit;
+      target.view ||= r.can_view;                             // what a role may do is the Admin's Permissions (same as the database)
+      target.edit ||= r.can_edit;
+      target.delete ||= r.can_delete;
     }
     state.perms[m] = p; state.pmPerms[m] = pm;
   }

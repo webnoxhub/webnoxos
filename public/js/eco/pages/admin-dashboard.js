@@ -6,6 +6,7 @@ import { todayStr, fmtLongDay, fmtDuration, fmtTime, fmtRelative, dueLabel, dueS
 import { ribbon, ribbonAxis, ribbonLegend, statsStrip, logItem } from '../components.js';
 import { liveAttrs } from '../timer.js';
 import { openTaskDrawer } from '../task-drawer.js';
+import { loadBusiness, businessPanel, businessError } from '../business.js';
 
 export async function render({ el }) {
   el.innerHTML = `
@@ -18,7 +19,8 @@ export async function render({ el }) {
 
   async function load() {
     const today = todayStr();
-    const [members, presence, tasks, timeline, report, logs] = await Promise.all([
+    const [biz, members, presence, tasks, timeline, report, logs] = await Promise.all([
+      loadBusiness().catch((e) => ({ error: e })),
       loadMembers(),
       rpc('team_presence'),
       q(supabase.from('tasks').select('id, title, status, priority, due_date, assigned_to, team_role, submitted_at').order('due_date', { ascending: true, nullsFirst: false })),
@@ -58,6 +60,7 @@ export async function render({ el }) {
     const deadlines = tasks.filter((t) => t.status !== 'completed' && t.due_date && t.due_date <= horizon).slice(0, 8);
 
     box.innerHTML = `
+      <div style="margin-bottom:20px">${biz.error ? businessError(biz.error) : businessPanel(biz)}</div>
       <div class="stats-pair">
         ${statsStrip([[
           { v: members.filter((m) => m.status !== 'inactive' && m.status !== 'suspended').length, k: 'Team members' },

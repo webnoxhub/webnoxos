@@ -11,7 +11,7 @@ import {
 } from './projects.js';
 
 // Invoices arrive with Finance; until then the Finances tab stays hidden.
-const INVOICES_READY = false;
+const INVOICES_READY = true;
 
 export const SOCIALS = [
   ['instagram', 'Instagram', 'IG', 'https://instagram.com/'],
