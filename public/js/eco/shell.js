@@ -95,6 +95,14 @@ export async function start({ profile: boot, workspace }) {
   if (state.isAdmin || can('finance')) supabase.rpc('finance_sweep').then(() => {}, () => {});
   refreshTimer().catch(() => {});
   window.addEventListener('hashchange', route);
+  // Slim down the page header once the page is scrolled (with a gap so it never flickers)
+  const root = document.documentElement;
+  const onScroll = () => {
+    const y = window.scrollY, room = document.documentElement.scrollHeight - window.innerHeight;
+    if (!root.classList.contains('is-scrolled') && y > 48 && room > 200) root.classList.add('is-scrolled');
+    else if (root.classList.contains('is-scrolled') && y < 8) root.classList.remove('is-scrolled');
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
   route();
 
   supabase.auth.onAuthStateChange((event) => {
