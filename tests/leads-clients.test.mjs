@@ -62,10 +62,10 @@ const BREP = await person('brep@beta.com', 'Bob Rep',    W2, 'member', ['sales_r
 const BPM  = await person('bpm@beta.com',  'Bea PM',     W2, 'member', ['project_manager']);
 
 console.log('Defaults are seeded per workspace');
-ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W1]))[0].c === 18, 'workspace Alpha has 6 roles x 3 modules');
-ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W2]))[0].c === 18, 'workspace Beta has its own copy');
+ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W1]))[0].c === 24, 'workspace Alpha has 6 roles x 4 modules');
+ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W2]))[0].c === 24, 'workspace Beta has its own copy');
 const W3 = (await q(`insert into workspaces(name,slug,short_code) values ('Gamma','gamma','GA') returning id`))[0].id;
-ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W3]))[0].c === 18, 'a new workspace is seeded by trigger');
+ok((await q(`select count(*)::int c from role_permissions where workspace_id=$1`, [W3]))[0].c === 24, 'a new workspace is seeded by trigger');
 
 console.log('Leads — who may do what');
 const [l1] = await as(A, () => q(`insert into leads (company, contact_name, source) values ('Acme Shoes', 'Tariq', 'Cold Call') returning id, workspace_id, created_by, status`));

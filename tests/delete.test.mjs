@@ -4,10 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeFake } from './fake-db.mjs';
-import { makeWorkGuard } from '../lib/work-guard.js';
 import { makeTeamGuard } from '../lib/team-guard.js';
 import { makeGuard } from '../lib/master-guard.js';
-import { makeHandler as makeProjects } from '../api/projects.js';
 import { makeHandler as makeMembers } from '../api/team/members.js';
 import { makeHandler as makeWorkspace } from '../api/master/workspace.js';
 
@@ -25,7 +23,6 @@ await db.exec(`
 await db.exec(fs.readFileSync(path.join(here, '..', 'supabase', 'schema.sql'), 'utf8'));
 await db.exec(fs.readFileSync(path.join(here, '..', 'supabase', 'schema.sql'), 'utf8'));   // part 8 must also be re-runnable
 const tokens = {}; const fake = makeFake(db, tokens);
-const projects = makeProjects(makeWorkGuard(() => fake));
 const members = makeMembers(makeTeamGuard(() => fake));
 const workspaceApi = makeWorkspace(makeGuard(() => fake));
 
@@ -50,16 +47,16 @@ for (const [k, e, n, t, roles, w] of [
   await db.query(`update profiles set workspace_id=$1, account_type=$2, roles=$3, job_title=$4, department=$5 where id=$6`, [w, t, roles, k === 'dan' ? 'Designer' : null, k === 'dan' ? 'Design' : null, id]);
 }
 // A project with a request, approval, comment, member: lots of lines that mention Dan or Sara.
-const P = (a, id, t, b) => call(projects, 'POST', `/api/projects?a=${a}&id=${id || ''}`, t, b);
-const proj = (await P('create', '', 't_admin', { name: 'Site', manager_id: U.pm })).json.id;
-const rq = (await P('request', proj, 't_pm', { items: [{ designation: 'Designer', qty: 1 }] })).json.id;
-await P('decide', rq, 't_admin', { decision: 'approve' });
-const slot = (await db.query(`select id from staffing_request_items where request_id='${rq}'`)).rows[0].id;
-await P('addmember', proj, 't_pm', { user_id: U.dan, item_id: slot });
-await P('comment', rq, 't_mgr', { body: 'hi' }).catch(() => {});
-await db.query(`insert into request_comments(request_id, author_id, body) values ('${rq}','${U.dan}','from dan')`);
-await db.query(`insert into activity_log(workspace_id, actor_id, text, involved) values ('${wsA}','${U.dan}','Dan Ali did something','{}')`);
-const danLines = await count(`select count(*)::int n from activity_log where actor_id='${U.dan}' or '${U.dan}' = any(involved)`);
+const cl = (await db.query(`insert into clients(workspace_id,name) values ('${wsA}','Acme') returning id`)).rows[0].id;
+const proj = (await db.query(`insert into projects(workspace_id,client_id,name,project_manager) values ('${wsA}',${cl},'Site','${U.pm}') returning id`)).rows[0].id;
+const rq = (await db.query(`insert into staffing_requests(workspace_id,project_id,requested_by,status) values ('${wsA}',${proj},'${U.pm}','approved') returning id`)).rows[0].id;
+const slot = (await db.query(`insert into staffing_request_items(workspace_id,request_id,designation,qty) values ('${wsA}',${rq},'Designer',1) returning id`)).rows[0].id;
+await db.query(`insert into project_members(workspace_id,project_id,member_id,item_id,added_by) values ('${wsA}',${proj},'${U.dan}',${slot},'${U.pm}')`);
+await db.query(`insert into request_comments(workspace_id,request_id,author_id,body) values ('${wsA}',${rq},'${U.dan}','from dan')`);
+await db.query(`insert into activity_logs(workspace_id,actor_id,actor_name,action,description) values ('${wsA}','${U.dan}','Dan Ali','x','Dan Ali did something')`);
+await db.query(`insert into activity_logs(workspace_id,actor_id,actor_name,subject_id,action,description) values ('${wsA}','${U.admin}','Admin Amir','${U.dan}','x','About Dan')`);
+await db.query(`insert into activity_logs(workspace_id,actor_id,actor_name,action,description) values ('${wsA}','${U.admin}','Admin Amir','x','Unrelated line')`);
+const danLines = await count(`select count(*)::int n from activity_logs where actor_id='${U.dan}' or subject_id='${U.dan}'`);
 ok('there are activity lines about Dan before deleting', danLines >= 2, danLines);
 
 const del = (id, t, confirm) => call(members, 'POST', `/api/team/members?id=${id}&action=delete`, t, { confirm });
@@ -75,14 +72,14 @@ x = await del(U.dan, 't_admin', ' dan ali ');
 ok('Admin deletes Dan (name confirm is case-insensitive)', x.status === 200);
 ok('sign-in account is gone', await count(`select count(*)::int n from auth.users where id='${U.dan}'`) === 0);
 ok('profile is gone', await count(`select count(*)::int n from profiles where id='${U.dan}'`) === 0);
-ok('every activity line about him is gone', await count(`select count(*)::int n from activity_log where actor_id='${U.dan}' or '${U.dan}' = any(involved)`) === 0);
+ok('every activity line about him is gone', await count(`select count(*)::int n from activity_logs where actor_id='${U.dan}' or subject_id='${U.dan}'`) === 0);
 ok('his comments are gone', await count(`select count(*)::int n from request_comments where author_id='${U.dan}'`) === 0);
-ok('his project membership is gone', await count(`select count(*)::int n from project_members where user_id='${U.dan}'`) === 0);
-ok('the project and other people\'s lines stay', await count(`select count(*)::int n from projects where id='${proj}'`) === 1 && await count(`select count(*)::int n from activity_log where workspace_id='${wsA}'`) >= 3);
+ok('his project membership is gone', await count(`select count(*)::int n from project_members where member_id='${U.dan}'`) === 0);
+ok('the project and other people\'s lines stay', await count(`select count(*)::int n from projects where id='${proj}'`) === 1 && await count(`select count(*)::int n from activity_logs where workspace_id='${wsA}'`) >= 1);
 // deleting a Project Manager removes his requests too
 x = await del(U.pm, 't_admin', 'PM Sara');
 ok('Admin deletes the Project Manager', x.status === 200);
-ok('his requests are gone, the project stays with no manager', await count(`select count(*)::int n from staffing_requests where requested_by is null or id='${rq}'`) === 0 && (await db.query(`select manager_id from projects where id='${proj}'`)).rows[0].manager_id === null);
+ok('his requests are gone, the project stays with no manager', await count(`select count(*)::int n from staffing_requests where requested_by is null or id='${rq}'`) === 0 && (await db.query(`select project_manager from projects where id='${proj}'`)).rows[0].project_manager === null);
 
 // ── workspace
 await db.query(`insert into subscriptions(workspace_id,cycle,amount_original,currency,fx_rate,amount,start_date) values ('${wsA}','monthly',10,'USD',1,10,current_date)`);
@@ -96,7 +93,7 @@ ok('wrong business name refused', x.status === 400);
 ok('nothing was deleted by the refusal', await count(`select count(*)::int n from workspaces where id='${wsA}'`) === 1);
 x = await delWs(wsA, 't_master', 'demo co');
 ok('Master deletes the workspace', x.status === 200 && x.json.accounts_left === 0, JSON.stringify(x));
-for (const t of ['workspaces where id', 'profiles where workspace_id', 'projects where workspace_id', 'activity_log where workspace_id', 'notifications where workspace_id', 'subscriptions where workspace_id', 'master_access_log where workspace_id', 'workspace_roles where workspace_id', 'staffing_requests where workspace_id'])
+for (const t of ['workspaces where id', 'profiles where workspace_id', 'projects where workspace_id', 'activity_logs where workspace_id', 'notifications where workspace_id', 'subscriptions where workspace_id', 'master_access_log where workspace_id', 'workspace_roles where workspace_id', 'staffing_requests where workspace_id'])
   ok('workspace data gone: ' + t.split(' ')[0], await count(`select count(*)::int n from ${t}='${wsA}'`) === 0);
 ok('its people can no longer sign in', await count(`select count(*)::int n from auth.users where email in ('a@x.com','m@x.com')`) === 0);
 ok('another workspace is untouched', await count(`select count(*)::int n from profiles where workspace_id='${wsB}'`) === 2 && await count(`select count(*)::int n from workspaces where id='${wsB}'`) === 1);

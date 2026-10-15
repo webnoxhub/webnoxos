@@ -11,7 +11,7 @@ export { INVOICE_STATUS, invoiceState, invoiceBadge };
 
 // Invoices come with Finance and Projects with their own page; flip these when those land.
 const INVOICES_READY = false;
-const PROJECTS_READY = false;
+const PROJECTS_READY = true;
 const canProj = () => PROJECTS_READY && can('projects', 'edit');
 
 export const CLIENT_STATUS = { onboarding: 'Onboarding', active: 'Active', paused: 'Paused', churned: 'Churned' };

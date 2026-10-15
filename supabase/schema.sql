@@ -656,8 +656,6 @@ create table if not exists public.activity_log (
   id           uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id),
   actor_id     uuid references public.profiles(id) on delete set null,
-  project_id   uuid references public.projects(id) on delete set null,
-  request_id   uuid references public.staffing_requests(id) on delete set null,
   text         text not null,
   created_at   timestamptz not null default now()
 );
@@ -668,8 +666,6 @@ create table if not exists public.notifications (
   workspace_id uuid not null references public.workspaces(id),
   user_id      uuid not null references public.profiles(id) on delete cascade,
   text         text not null,
-  project_id   uuid references public.projects(id) on delete cascade,
-  request_id   uuid references public.staffing_requests(id) on delete cascade,
   read_at      timestamptz,
   created_at   timestamptz not null default now()
 );
@@ -688,9 +684,14 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists projects_manager_guard on public.projects;
-create trigger projects_manager_guard before insert or update of manager_id on public.projects
-  for each row execute function public.project_manager_guard();
+-- (only on the first-version tables; PART 15 replaces them with workspace-scoped ones)
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'projects' and column_name = 'manager_id') then
+    drop trigger if exists projects_manager_guard on public.projects;
+    create trigger projects_manager_guard before insert or update of manager_id on public.projects
+      for each row execute function public.project_manager_guard();
+  end if;
+end $$;
 
 create or replace function public.project_member_guard() returns trigger
 language plpgsql as $$
@@ -701,9 +702,13 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists project_members_guard on public.project_members;
-create trigger project_members_guard before insert on public.project_members
-  for each row execute function public.project_member_guard();
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'project_members' and column_name = 'user_id') then
+    drop trigger if exists project_members_guard on public.project_members;
+    create trigger project_members_guard before insert on public.project_members
+      for each row execute function public.project_member_guard();
+  end if;
+end $$;
 
 alter table public.projects               enable row level security;
 alter table public.staffing_requests      enable row level security;
@@ -2608,3 +2613,884 @@ end $$;
 
 revoke execute on function public.perm(text, text), public.pm_perm(text, text), public.leads_notify() from public, anon, authenticated;
 grant execute on function public.perm(text, text), public.pm_perm(text, text) to authenticated;
+
+-- ============================================================================
+-- PART 15 — Projects (EcomHub's 7-tab projects) + staffing requests (Project Agents)
+-- ============================================================================
+-- Run once in the Supabase SQL Editor (after PART 14). Safe to run again.
+--
+-- How a project gets people:
+--   * Admin / Manager creates the project for a client and picks the Project Manager.
+--   * The Project Manager asks for people ("2 x Designer, 1 x Developer"); the Admin / a Manager
+--     can Approve, Decline or Discuss it.
+--   * After approval the Project Manager fills each slot with a matching Project Agent.
+--   * Admin / Manager can also add or remove people directly.
+-- Test projects from the first Webnox version are moved across (each becomes a client + a project).
+
+-- 15.0 Old (uuid) tables are renamed out of the way; they are moved across at the end -------
+do $$ declare t text; ix text; begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'projects' and column_name = 'id' and data_type = 'uuid') then
+    alter table public.notifications drop column if exists project_id;
+    alter table public.notifications drop column if exists request_id;
+    alter table public.activity_log  drop column if exists project_id;
+    alter table public.activity_log  drop column if exists request_id;
+    drop trigger if exists projects_manager_guard on public.projects;
+    drop trigger if exists project_members_guard on public.project_members;
+    foreach t in array array['projects', 'staffing_requests', 'staffing_request_items', 'project_members', 'request_comments'] loop
+      for ix in select indexname from pg_indexes where schemaname = 'public' and tablename = t loop
+        execute format('alter index public.%I rename to %I', ix, 'legacy_' || ix);
+      end loop;
+      execute format('alter table public.%I rename to %I', t, 'legacy_' || t);
+    end loop;
+  end if;
+end $$;
+
+-- (a full re-run of the file would put PART 7's old guards back on the new tables)
+drop trigger if exists projects_manager_guard on public.projects;
+drop trigger if exists project_members_guard on public.project_members;
+
+-- 15.1 eco_fill_workspace learns about projects and staffing requests -------------------------
+create or replace function public.eco_fill_workspace() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_ws uuid; v_key text;
+begin
+  if new.workspace_id is not null then return new; end if;
+  v_key := to_jsonb(new) ->> tg_argv[0];
+  if v_key is not null then
+    v_ws := case tg_argv[1]
+      when 'profile' then (select workspace_id from public.profiles      where id = v_key::uuid)
+      when 'task'    then (select workspace_id from public.tasks         where id = v_key::bigint)
+      when 'session' then (select workspace_id from public.user_sessions where id = v_key::uuid)
+      when 'client'  then (select workspace_id from public.clients       where id = v_key::bigint)
+      when 'project' then (select workspace_id from public.projects      where id = v_key::bigint)
+      when 'request' then (select workspace_id from public.staffing_requests where id = v_key::bigint)
+    end;
+  end if;
+  new.workspace_id := coalesce(v_ws, public.current_workspace());
+  return new;
+end $$;
+
+-- 15.2 Permissions: a "projects" module ---------------------------------------------------------
+alter table public.role_permissions drop constraint if exists role_permissions_module_check;
+alter table public.role_permissions add constraint role_permissions_module_check
+  check (module in ('leads', 'clients', 'finance', 'projects'));
+
+create or replace function public.seed_role_permissions(p_ws uuid) returns void
+language sql security definer set search_path = public as $$
+  insert into public.role_permissions (workspace_id, role_key, module, can_view, can_edit, can_delete)
+  select p_ws, d.role_key, d.module, d.v, d.e, d.x
+    from (values
+      ('lead_gen',        'leads',   true,  true,  false), ('lead_gen',        'clients', false, false, false), ('lead_gen',        'finance', false, false, false), ('lead_gen',        'projects', false, false, false),
+      ('sales_rep',       'leads',   true,  true,  false), ('sales_rep',       'clients', true,  false, false), ('sales_rep',       'finance', false, false, false), ('sales_rep',       'projects', false, false, false),
+      ('cold_caller',     'leads',   true,  true,  false), ('cold_caller',     'clients', false, false, false), ('cold_caller',     'finance', false, false, false), ('cold_caller',     'projects', false, false, false),
+      ('finance',         'leads',   false, false, false), ('finance',         'clients', true,  false, false), ('finance',         'finance', true,  true,  true),  ('finance',         'projects', false, false, false),
+      ('project_manager', 'leads',   false, false, false), ('project_manager', 'clients', true,  true,  false), ('project_manager', 'finance', false, false, false), ('project_manager', 'projects', true,  true,  false),
+      ('project_agent',   'leads',   false, false, false), ('project_agent',   'clients', false, false, false), ('project_agent',   'finance', false, false, false), ('project_agent',   'projects', false, false, false)
+    ) d(role_key, module, v, e, x)
+  on conflict (workspace_id, role_key, module) do nothing;
+$$;
+select public.seed_role_permissions(id) from public.workspaces;
+
+-- 15.3 Tables ----------------------------------------------------------------------------------------
+create table if not exists public.projects (
+  id               bigint generated always as identity primary key,
+  workspace_id     uuid not null references public.workspaces(id),
+  client_id        bigint not null references public.clients(id) on delete cascade,
+  name             text not null check (char_length(name) between 1 and 200),
+  description      text not null default '',
+  status           text not null default 'planning' check (status in ('planning', 'active', 'on_hold', 'completed', 'cancelled')),
+  project_manager  uuid references public.profiles(id) on delete set null,
+  start_date       date default current_date,
+  due_date         date,
+  website_url      text,
+  socials          jsonb not null default '{}'::jsonb check (jsonb_typeof(socials) = 'object'),
+  created_by       uuid references public.profiles(id) on delete set null,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  legacy_id        uuid
+);
+create index if not exists projects_ws_idx     on public.projects (workspace_id, created_at desc);
+create index if not exists projects_client_idx on public.projects (client_id);
+create index if not exists projects_pm_idx     on public.projects (project_manager);
+
+-- A request from the Project Manager: "I need these people". Admin / Manager decide.
+create table if not exists public.staffing_requests (
+  id             bigint generated always as identity primary key,
+  workspace_id   uuid not null references public.workspaces(id),
+  project_id     bigint not null references public.projects(id) on delete cascade,
+  requested_by   uuid references public.profiles(id) on delete cascade,
+  status         text not null default 'pending' check (status in ('pending', 'discussing', 'approved', 'declined')),
+  note           text check (note is null or char_length(note) <= 500),
+  decided_by     uuid references public.profiles(id) on delete set null,
+  decided_at     timestamptz,
+  decision_note  text check (decision_note is null or char_length(decision_note) <= 500),
+  created_at     timestamptz not null default now(),
+  legacy_id      uuid
+);
+create index if not exists staffing_requests_project_idx on public.staffing_requests (project_id, created_at desc);
+
+create table if not exists public.staffing_request_items (
+  id            bigint generated always as identity primary key,
+  workspace_id  uuid not null references public.workspaces(id),
+  request_id    bigint not null references public.staffing_requests(id) on delete cascade,
+  designation   text not null check (char_length(btrim(designation)) between 1 and 60),
+  department    text check (department is null or char_length(department) <= 60),
+  qty           int not null check (qty between 1 and 20),
+  legacy_id     uuid
+);
+create index if not exists staffing_items_request_idx on public.staffing_request_items (request_id);
+
+create table if not exists public.request_comments (
+  id            bigint generated always as identity primary key,
+  workspace_id  uuid not null references public.workspaces(id),
+  request_id    bigint not null references public.staffing_requests(id) on delete cascade,
+  author_id     uuid references public.profiles(id) on delete cascade,
+  body          text not null check (char_length(btrim(body)) between 1 and 1000),
+  created_at    timestamptz not null default now()
+);
+create index if not exists request_comments_req_idx on public.request_comments (request_id, created_at);
+
+-- Who is on a project. 'approved' = on the team now; 'removed' = was on it.
+create table if not exists public.project_members (
+  id            bigint generated always as identity primary key,
+  workspace_id  uuid not null references public.workspaces(id),
+  project_id    bigint not null references public.projects(id) on delete cascade,
+  member_id     uuid not null references public.profiles(id) on delete cascade,
+  item_id       bigint references public.staffing_request_items(id) on delete set null,
+  role_label    text not null default 'Member',
+  status        text not null default 'approved' check (status in ('approved', 'removed')),
+  added_by      uuid references public.profiles(id) on delete set null,
+  added_at      timestamptz not null default now(),
+  removed_by    uuid references public.profiles(id) on delete set null,
+  removed_at    timestamptz
+);
+create unique index if not exists project_members_open_uq on public.project_members (project_id, member_id) where status = 'approved';
+create index if not exists project_members_member_idx  on public.project_members (member_id, status);
+create index if not exists project_members_project_idx on public.project_members (project_id, status);
+create index if not exists project_members_item_idx    on public.project_members (item_id);
+
+create table if not exists public.project_requirements (
+  id            bigint generated always as identity primary key,
+  workspace_id  uuid not null references public.workspaces(id),
+  project_id    bigint not null references public.projects(id) on delete cascade,
+  title         text not null check (char_length(title) between 1 and 300),
+  details       text not null default '',
+  is_done       boolean not null default false,
+  sort          int not null default 0,
+  created_by    uuid references public.profiles(id) on delete set null,
+  created_at    timestamptz not null default now(),
+  done_by       uuid references public.profiles(id) on delete set null,
+  done_at       timestamptz,
+  updated_at    timestamptz not null default now()
+);
+create index if not exists project_requirements_project_idx on public.project_requirements (project_id, sort, id);
+
+alter table public.tasks        add column if not exists project_id bigint references public.projects(id) on delete set null;
+alter table public.client_files add column if not exists project_id bigint references public.projects(id) on delete set null;
+create index if not exists tasks_project_idx        on public.tasks (project_id);
+create index if not exists client_files_project_idx on public.client_files (project_id);
+
+do $$ declare d record; begin
+  for d in select * from (values
+      ('projects', 'client_id', 'client'), ('project_members', 'project_id', 'project'), ('project_requirements', 'project_id', 'project'),
+      ('staffing_requests', 'project_id', 'project'), ('staffing_request_items', 'request_id', 'request'), ('request_comments', 'request_id', 'request')
+    ) v(t, col, kind) loop
+    execute format('drop trigger if exists aa_ws_fill on public.%I', d.t);
+    execute format('create trigger aa_ws_fill before insert on public.%I for each row execute function public.eco_fill_workspace(%L, %L)', d.t, d.col, d.kind);
+  end loop;
+end $$;
+
+-- 15.4 Access helpers (all stay inside the caller's workspace) ---------------------------------
+create or replace function public.is_project_pm(p_project bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from projects where id = p_project and workspace_id = current_workspace() and project_manager = auth.uid())
+     and pm_perm('projects', 'view');
+$$;
+
+-- the person who runs this project (no role switch needed: used for staffing)
+create or replace function public.is_project_lead(p_project bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from projects where id = p_project and workspace_id = current_workspace() and project_manager = auth.uid());
+$$;
+
+create or replace function public.is_project_member(p_project bigint, p_member uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from project_members where project_id = p_project and member_id = p_member and status = 'approved');
+$$;
+
+create or replace function public.is_client_pm(p_client bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from clients where id = p_client and workspace_id = current_workspace() and project_manager = auth.uid())
+     and pm_perm('clients', 'view');
+$$;
+
+create or replace function public.can_project(p_project bigint, p_action text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from projects pr where pr.id = p_project and pr.workspace_id = current_workspace()
+                   and (perm('projects', p_action)
+                        or (pr.project_manager = auth.uid() and pm_perm('projects', p_action))
+                        or (p_action = 'view' and is_project_member(pr.id, auth.uid()))));
+$$;
+
+create or replace function public.can_manage_project(p_project bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from projects pr where pr.id = p_project and pr.workspace_id = current_workspace()
+                   and (perm('projects', 'edit') or (pr.project_manager = auth.uid() and pm_perm('projects', 'edit'))));
+$$;
+
+create or replace function public.client_via_project(p_client bigint, p_action text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from projects pr where pr.client_id = p_client and pr.workspace_id = current_workspace()
+                   and ((pr.project_manager = auth.uid() and pm_perm('clients', p_action))
+                        or (p_action = 'view' and is_project_member(pr.id, auth.uid()))));
+$$;
+
+-- Storage paths: "<workspace>/<client>/<file>" or "<workspace>/<client>/p<project>/<file>"
+create or replace function public.can_storage_file(p_name text, p_action text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare parts text[] := string_to_array(p_name, '/'); v_client bigint; v_project bigint;
+begin
+  if parts[1] is distinct from current_workspace()::text then return false; end if;
+  if parts[2] is null or parts[2] !~ '^\d+$' then return false; end if;
+  v_client := parts[2]::bigint;
+  if can_client(v_client, p_action) then return true; end if;
+  if array_length(parts, 1) >= 4 and parts[3] ~ '^p\d+$' then
+    v_project := substr(parts[3], 2)::bigint;
+    return exists (select 1 from projects where id = v_project and client_id = v_client) and can_project(v_project, p_action);
+  end if;
+  return false;
+end $$;
+
+-- Tasks of a project belong to its client; the link is checked inside the workspace
+create or replace function public.project_link_before() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.project_id is not null then
+    select client_id into new.client_id from projects where id = new.project_id and workspace_id = new.workspace_id;
+    if not found then raise exception 'Project not found'; end if;
+  end if;
+  return new;
+end $$;
+do $$ declare t text; begin
+  foreach t in array array['tasks', 'client_files'] loop
+    execute format('drop trigger if exists %I on public.%I', t || '_project_link', t);
+    execute format('create trigger %I before insert or update on public.%I for each row execute function public.project_link_before()', t || '_project_link', t);
+  end loop;
+end $$;
+
+-- 15.5 Projects: validation, audit, notifications -------------------------------------------------------
+create or replace function public.projects_before_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := coalesce(auth.uid(), new.created_by);
+    new.created_at := now();
+    if not exists (select 1 from clients where id = new.client_id and workspace_id = new.workspace_id) then raise exception 'Client not found'; end if;
+  else
+    new.created_by := old.created_by; new.created_at := old.created_at; new.client_id := old.client_id; new.workspace_id := old.workspace_id;
+  end if;
+  new.updated_at := now();
+  if new.project_manager is not null and (tg_op = 'INSERT' or new.project_manager is distinct from old.project_manager) then
+    if not exists (select 1 from member_roles m join profiles p on p.id = m.member_id
+                    where m.member_id = new.project_manager and m.role_key = 'project_manager'
+                      and p.workspace_id = new.workspace_id and p.status in ('active', 'invited')) then
+      raise exception 'Pick a member with the Project Manager role';
+    end if;
+  end if;
+  if auth.uid() is not null and tg_op = 'UPDATE' and new.project_manager is distinct from old.project_manager and not perm('projects', 'edit') then
+    raise exception 'Only the admin or a manager can change the project manager';
+  end if;
+  if new.due_date is not null and new.start_date is not null and new.due_date < new.start_date then
+    raise exception 'The due date is before the start date';
+  end if;
+  return new;
+end $$;
+drop trigger if exists projects_before on public.projects;
+create trigger projects_before before insert or update on public.projects for each row execute function public.projects_before_write();
+
+create or replace function public.projects_after_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_link text; v_who text := coalesce(member_label(auth.uid()), 'System'); v_client text; v_actor text := coalesce(member_name(auth.uid()), 'System');
+begin
+  if tg_op = 'DELETE' then
+    perform log_event('project_deleted', 'project', old.id::text, v_actor || ' deleted the project ' || old.name);
+    return old;
+  end if;
+  v_link := '#/projects?open=' || new.id;
+  select name into v_client from clients where id = new.client_id;
+  if tg_op = 'INSERT' then
+    perform log_event('project_created', 'project', new.id::text, v_actor || ' created the project ' || new.name || ' for ' || coalesce(v_client, 'a client'),
+      jsonb_build_object('client_id', new.client_id), new.project_manager);
+    perform notify(new.project_manager, 'project', 'Project assigned to you: ' || new.name, 'Client ' || coalesce(v_client, '') || '. By ' || v_who, v_link);
+    return new;
+  end if;
+  if new.project_manager is distinct from old.project_manager then
+    perform log_event('project_pm_assigned', 'project', new.id::text,
+      v_actor || ' assigned ' || coalesce(member_name(new.project_manager), 'nobody') || ' as Project Manager of ' || new.name,
+      jsonb_build_object('from', member_name(old.project_manager), 'to', member_name(new.project_manager)), new.project_manager);
+    perform notify(new.project_manager, 'project', 'Project assigned to you: ' || new.name, 'Client ' || coalesce(v_client, '') || '. By ' || v_who, v_link);
+    perform notify(old.project_manager, 'project', 'Project moved to another PM: ' || new.name, 'By ' || v_who, v_link);
+  end if;
+  if new.status is distinct from old.status then
+    perform log_event('project_status_changed', 'project', new.id::text, v_actor || ' moved the project ' || new.name || ' to ' || replace(new.status, '_', ' '),
+      jsonb_build_object('from', old.status, 'to', new.status), new.project_manager);
+    if new.project_manager = auth.uid() then
+      perform notify_managers('project', 'Project ' || replace(new.status, '_', ' ') || ': ' || new.name, 'By ' || v_who, v_link, new.workspace_id);
+    elsif new.project_manager is not distinct from old.project_manager then
+      perform notify(new.project_manager, 'project', 'Project ' || replace(new.status, '_', ' ') || ': ' || new.name, 'By ' || v_who, v_link);
+    end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists projects_after on public.projects;
+create trigger projects_after after insert or update or delete on public.projects for each row execute function public.projects_after_write();
+
+-- Requirements checklist
+create or replace function public.requirements_before_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.created_by := coalesce(auth.uid(), new.created_by); new.created_at := now();
+  else
+    new.created_by := old.created_by; new.created_at := old.created_at; new.project_id := old.project_id; new.workspace_id := old.workspace_id;
+  end if;
+  new.updated_at := now();
+  if new.is_done and (tg_op = 'INSERT' or not old.is_done) then new.done_by := auth.uid(); new.done_at := now(); end if;
+  if not new.is_done then new.done_by := null; new.done_at := null; end if;
+  return new;
+end $$;
+drop trigger if exists requirements_before on public.project_requirements;
+create trigger requirements_before before insert or update on public.project_requirements for each row execute function public.requirements_before_write();
+
+create or replace function public.requirements_after_write() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_name text;
+begin
+  select name into v_name from projects where id = coalesce(new.project_id, old.project_id);
+  if tg_op = 'INSERT' then
+    perform log_event('requirement_added', 'project', new.project_id::text, 'Added requirement "' || new.title || '" to ' || coalesce(v_name, 'project'));
+  elsif tg_op = 'UPDATE' and new.is_done is distinct from old.is_done then
+    perform log_event(case when new.is_done then 'requirement_done' else 'requirement_reopened' end, 'project', new.project_id::text,
+      case when new.is_done then 'Completed requirement "' else 'Reopened requirement "' end || new.title || '"');
+  elsif tg_op = 'DELETE' then
+    perform log_event('requirement_deleted', 'project', old.project_id::text, 'Removed requirement "' || old.title || '"');
+  end if;
+  return coalesce(new, old);
+end $$;
+drop trigger if exists requirements_after on public.project_requirements;
+create trigger requirements_after after insert or update or delete on public.project_requirements for each row execute function public.requirements_after_write();
+
+-- 15.6 Staffing requests --------------------------------------------------------------------------------
+-- Can this person fill an approved slot? Active Project Agent, same designation (and department, if asked).
+create or replace function public.agent_fits(p_member uuid, p_item bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles p, staffing_request_items i
+     where p.id = p_member and i.id = p_item and p.workspace_id = i.workspace_id
+       and p.status = 'active' and p.account_type = 'member' and 'project_agent' = any(p.roles)
+       and lower(btrim(coalesce(p.job_title, ''))) = lower(btrim(i.designation))
+       and (i.department is null or lower(btrim(coalesce(p.department, ''))) = lower(btrim(i.department))));
+$$;
+
+create or replace function public.staffing_label(p_request bigint) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce(string_agg(designation, ', ' order by id), '') from staffing_request_items where request_id = p_request;
+$$;
+
+create or replace function public.staffing_request_create(p_project bigint, p_items jsonb, p_note text default null)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); pr projects%rowtype; v_id bigint; it jsonb; v_des text; v_qty int; v_seen text[] := '{}';
+        v_note text := nullif(left(btrim(coalesce(p_note, '')), 500), ''); v_dept text; v_label text;
+begin
+  select * into pr from projects where id = p_project and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Project not found'; end if;
+  if pr.project_manager is distinct from v_uid then raise exception 'Only the Project Manager of this project can ask for people'; end if;
+  if pr.status not in ('planning', 'active') then raise exception 'This project is not active'; end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then raise exception 'Add at least one requirement'; end if;
+  if jsonb_array_length(p_items) > 8 then raise exception 'At most 8 requirements per request'; end if;
+  insert into staffing_requests (workspace_id, project_id, requested_by, note) values (pr.workspace_id, p_project, v_uid, v_note) returning id into v_id;
+  for it in select * from jsonb_array_elements(p_items) loop
+    v_des := left(btrim(coalesce(it ->> 'designation', '')), 60);
+    v_dept := nullif(left(btrim(coalesce(it ->> 'department', '')), 60), '');
+    v_qty := case when (it ->> 'qty') ~ '^\d{1,3}$' then (it ->> 'qty')::int end;
+    if v_des = '' then raise exception 'Every requirement needs a designation'; end if;
+    if v_qty is null or v_qty < 1 or v_qty > 20 then raise exception 'Quantity must be 1 to 20'; end if;
+    if lower(v_des) = any(v_seen) then raise exception 'Each designation can be listed once: %', v_des; end if;
+    v_seen := v_seen || lower(v_des);
+    insert into staffing_request_items (workspace_id, request_id, designation, department, qty) values (pr.workspace_id, v_id, v_des, v_dept, v_qty);
+  end loop;
+  v_label := staffing_label(v_id);
+  perform log_event('staffing_requested', 'project', p_project::text,
+    member_name(v_uid) || ' sent a ' || v_label || ' request for ' || pr.name, jsonb_build_object('request_id', v_id), v_uid);
+  perform notify_managers('approval', member_name(v_uid) || ' sent a ' || v_label || ' request for ' || pr.name,
+    coalesce(v_note, 'Waiting for your decision'), '#/projects?open=' || p_project || '&tab=team', pr.workspace_id);
+  return v_id;
+end $$;
+
+create or replace function public.staffing_request_decide(p_id bigint, p_decision text, p_note text default null)
+returns text language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); r staffing_requests%rowtype; pr projects%rowtype; v_label text; v_status text;
+        v_note text := nullif(left(btrim(coalesce(p_note, '')), 500), ''); v_me text := member_name(auth.uid()); v_verb text; v_link text;
+begin
+  if not is_manager() then raise exception 'Only the admin or a manager can decide this request'; end if;
+  if p_decision not in ('approve', 'decline', 'discuss') then raise exception 'Invalid action'; end if;
+  select * into r from staffing_requests where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Request not found'; end if;
+  if r.requested_by = v_uid then raise exception 'You can''t decide your own request'; end if;
+  if r.status in ('approved', 'declined') then raise exception 'This request is already closed'; end if;
+  if r.status = 'discussing' and p_decision = 'discuss' then raise exception 'Invalid action'; end if;
+  select * into pr from projects where id = r.project_id;
+  v_label := staffing_label(r.id);
+  v_status := case p_decision when 'approve' then 'approved' when 'decline' then 'declined' else 'discussing' end;
+  if p_decision = 'discuss' then
+    update staffing_requests set status = v_status where id = r.id;
+    if v_note is not null then insert into request_comments (workspace_id, request_id, author_id, body) values (r.workspace_id, r.id, v_uid, v_note); end if;
+  else
+    update staffing_requests set status = v_status, decided_by = v_uid, decided_at = now(), decision_note = v_note where id = r.id;
+  end if;
+  v_verb := case p_decision when 'approve' then 'approved' when 'decline' then 'declined' else 'opened a discussion on' end;
+  v_link := '#/projects?open=' || r.project_id || '&tab=team';
+  perform log_event('staffing_' || v_status, 'project', r.project_id::text,
+    v_me || ' ' || v_verb || ' the ' || v_label || ' request on ' || pr.name, jsonb_build_object('request_id', r.id, 'note', v_note), r.requested_by);
+  perform notify(r.requested_by, 'approval', v_me || ' ' || v_verb || ' your ' || v_label || ' request on ' || pr.name, coalesce(v_note, ''), v_link);
+  perform notify_managers('approval', v_me || ' ' || v_verb || ' the ' || v_label || ' request on ' || pr.name, coalesce(v_note, ''), v_link, r.workspace_id);
+  return v_status;
+end $$;
+
+create or replace function public.staffing_request_comment(p_id bigint, p_body text) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); r staffing_requests%rowtype; pr projects%rowtype; v_label text; v_me text := member_name(auth.uid());
+        v_body text := left(btrim(coalesce(p_body, '')), 1000); v_link text;
+begin
+  select * into r from staffing_requests where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Request not found'; end if;
+  if not (is_manager() or r.requested_by = v_uid) then raise exception 'Not allowed'; end if;
+  if v_body = '' then raise exception 'Write a comment first'; end if;
+  if r.status in ('approved', 'declined') then raise exception 'This request is already closed'; end if;
+  select * into pr from projects where id = r.project_id;
+  v_label := staffing_label(r.id);
+  v_link := '#/projects?open=' || r.project_id || '&tab=team';
+  insert into request_comments (workspace_id, request_id, author_id, body) values (r.workspace_id, r.id, v_uid, v_body);
+  perform log_event('staffing_commented', 'project', r.project_id::text, v_me || ' commented on the ' || v_label || ' request on ' || pr.name,
+    jsonb_build_object('request_id', r.id), r.requested_by);
+  perform notify(r.requested_by, 'approval', v_me || ' commented on your ' || v_label || ' request on ' || pr.name, v_body, v_link);
+  perform notify_managers('approval', v_me || ' commented on the ' || v_label || ' request on ' || pr.name, v_body, v_link, r.workspace_id);
+end $$;
+
+-- 15.7 Project team -----------------------------------------------------------------------------------------
+-- Project Manager: only into an approved slot, with a matching Project Agent.
+-- Admin / Manager: straight in (with or without a slot).
+create or replace function public.project_member_add(p_project bigint, p_member uuid, p_item bigint default null)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); pr projects%rowtype; v_id bigint; it staffing_request_items%rowtype; rq staffing_requests%rowtype;
+        v_label text := 'Member'; v_name text; v_me text := member_name(auth.uid());
+begin
+  select * into pr from projects where id = p_project and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Project not found'; end if;
+  if not (is_manager() or pr.project_manager = v_uid) then raise exception 'Only the admin, a manager or the Project Manager can add people'; end if;
+  if pr.status in ('completed', 'cancelled') then raise exception 'This project is closed. Reopen it to add people.'; end if;
+  if not exists (select 1 from profiles where id = p_member and workspace_id = pr.workspace_id and status = 'active') then raise exception 'Pick an active team member'; end if;
+  v_name := member_name(p_member);
+  if p_member = pr.project_manager then raise exception '% already runs this project as Project Manager', v_name; end if;
+  if exists (select 1 from project_members where project_id = p_project and member_id = p_member and status = 'approved') then
+    raise exception '% is already on this project', v_name; end if;
+  if p_item is null and not is_manager() then raise exception 'Choose an approved slot to fill'; end if;
+  if p_item is not null then
+    select * into it from staffing_request_items where id = p_item and workspace_id = pr.workspace_id;
+    if not found then raise exception 'Slot not found'; end if;
+    select * into rq from staffing_requests where id = it.request_id;
+    if rq.project_id <> p_project or rq.status <> 'approved' then raise exception 'This request is not approved'; end if;
+    if (select count(*) from project_members where item_id = it.id and status = 'approved') >= it.qty then raise exception 'All slots for this requirement are filled'; end if;
+    if not agent_fits(p_member, it.id) then raise exception 'This person does not match the approved requirement'; end if;
+    v_label := it.designation;
+  end if;
+  insert into project_members (workspace_id, project_id, member_id, item_id, role_label, added_by)
+  values (pr.workspace_id, p_project, p_member, p_item, v_label, v_uid) returning id into v_id;
+  perform log_event('project_member_added', 'project', p_project::text, v_me || ' added ' || v_name || ' to ' || pr.name, '{}'::jsonb, p_member);
+  perform notify(p_member, 'project', 'You were added to ' || pr.name, 'As ' || v_label || ', by ' || member_label(v_uid), '#/projects?open=' || p_project);
+  perform notify_managers('project', v_name || ' joined ' || pr.name, 'Added by ' || member_label(v_uid), '#/projects?open=' || p_project || '&tab=team', pr.workspace_id);
+  return v_id;
+end $$;
+
+create or replace function public.project_member_remove(p_id bigint) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); r project_members%rowtype; pr projects%rowtype;
+begin
+  select * into r from project_members where id = p_id and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Member not found'; end if;
+  if r.status <> 'approved' then raise exception 'They are not on this project'; end if;
+  select * into pr from projects where id = r.project_id;
+  if not (is_manager() or pr.project_manager = v_uid) then raise exception 'Only the admin, a manager or the Project Manager can remove people'; end if;
+  update project_members set status = 'removed', removed_by = v_uid, removed_at = now() where id = p_id;
+  perform log_event('project_member_removed', 'project', r.project_id::text,
+    member_name(v_uid) || ' removed ' || member_name(r.member_id) || ' from ' || pr.name, '{}'::jsonb, r.member_id);
+  perform notify(r.member_id, 'project', 'You were removed from ' || pr.name, 'By ' || member_label(v_uid), '#/projects');
+end $$;
+
+-- Who can fill each approved slot that still has room (for the Project Manager / Admin)
+create or replace function public.project_candidates(p_project bigint)
+returns table (item_id bigint, member_id uuid, name text, job_title text, department text)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not (is_manager() or is_project_lead(p_project)) then return; end if;
+  return query
+    select i.id, p.id, member_name(p.id), p.job_title, p.department
+      from staffing_requests r
+      join staffing_request_items i on i.request_id = r.id
+      join profiles p on p.workspace_id = r.workspace_id
+     where r.project_id = p_project and r.workspace_id = current_workspace() and r.status = 'approved'
+       and (select count(*) from project_members m where m.item_id = i.id and m.status = 'approved') < i.qty
+       and agent_fits(p.id, i.id)
+       and not exists (select 1 from project_members m where m.project_id = p_project and m.member_id = p.id and m.status = 'approved')
+       and p.id is distinct from (select project_manager from projects where id = p_project)
+     order by i.id, 3;
+end $$;
+
+-- 15.8 Tasks: Project Managers run the tasks of their projects ----------------------------------------
+create or replace function public.can_see_task(p_task bigint) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from tasks t where t.id = p_task and t.workspace_id = current_workspace()
+                   and (t.assigned_to = auth.uid() or is_manager()
+                        or (t.client_id is not null and is_client_pm(t.client_id))
+                        or (t.project_id is not null and is_project_pm(t.project_id))));
+$$;
+
+create or replace function public.task_review(p_task_id bigint, p_approve boolean, p_note text default null)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); t tasks%rowtype; v_note text := nullif(trim(coalesce(p_note, '')), '');
+begin
+  select * into t from tasks where id = p_task_id for update;
+  if not found or t.workspace_id is distinct from current_workspace() then raise exception 'Task not found'; end if;
+  if not (is_manager() or (t.client_id is not null and is_client_pm(t.client_id)) or (t.project_id is not null and is_project_pm(t.project_id))) then
+    raise exception 'Only the admin, a manager or the project manager can review this task';
+  end if;
+  if t.status <> 'in_review' then raise exception 'This task is not waiting for review'; end if;
+  if not p_approve and v_note is null then raise exception 'Add a note so the member knows what to change'; end if;
+  update tasks set status = case when p_approve then 'completed' else 'in_progress' end, review_note = v_note where id = p_task_id;
+  if v_note is not null then
+    insert into task_comments (task_id, author_id, body)
+    values (p_task_id, v_uid, case when p_approve then 'Approved: ' else 'Changes requested: ' end || v_note);
+  end if;
+end $$;
+
+create or replace function public.tasks_notify() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_link text := '#/my-tasks'; v_pm uuid; v_pm_link text;
+begin
+  if new.project_id is not null then
+    select project_manager into v_pm from projects where id = new.project_id;
+    v_pm_link := '#/projects?open=' || new.project_id || '&tab=tasks';
+  elsif new.client_id is not null then
+    select project_manager into v_pm from clients where id = new.client_id;
+    v_pm_link := '#/clients?open=' || new.client_id;
+  end if;
+  if tg_op = 'INSERT' then
+    perform notify(new.assigned_to, 'task', 'New task: ' || new.title, 'Assigned by ' || coalesce(member_label(auth.uid()), 'your manager'), v_link);
+    return new;
+  end if;
+  if new.assigned_to is distinct from old.assigned_to then
+    perform notify(new.assigned_to, 'task', 'New task: ' || new.title, 'Assigned by ' || coalesce(member_label(auth.uid()), 'your manager'), v_link);
+  end if;
+  if new.status is distinct from old.status then
+    if new.status = 'in_review' then
+      perform notify_managers('review', 'Ready for review: ' || new.title, 'Submitted by ' || coalesce(member_name(new.assigned_to), 'a member'), '#/tasks?status=in_review', new.workspace_id);
+      perform notify(v_pm, 'review', 'Ready for review: ' || new.title, 'Submitted by ' || coalesce(member_name(new.assigned_to), 'a member'), v_pm_link);
+    elsif old.status = 'in_review' and new.status = 'completed' then
+      perform notify(new.assigned_to, 'task', 'Approved: ' || new.title, coalesce(new.review_note, ''), v_link);
+    elsif old.status = 'in_review' then
+      perform notify(new.assigned_to, 'task', 'Changes requested: ' || new.title, coalesce(new.review_note, ''), v_link);
+    elsif new.assigned_to is not distinct from old.assigned_to then
+      perform notify(new.assigned_to, 'task', 'Task moved to ' || replace(new.status, '_', ' ') || ': ' || new.title, '', v_link);
+    end if;
+  elsif new.assigned_to is not distinct from old.assigned_to
+        and (new.title, new.description, new.priority, new.due_date) is distinct from (old.title, old.description, old.priority, old.due_date) then
+    perform notify(new.assigned_to, 'task', 'Task updated: ' || new.title, 'Check the latest details', v_link);
+  end if;
+  return new;
+end $$;
+
+-- Files on a project go to its Project Manager
+create or replace function public.files_notify() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare c clients%rowtype; v_pm uuid; v_pid bigint := coalesce(new.project_id, old.project_id);
+begin
+  select * into c from clients where id = coalesce(new.client_id, old.client_id);
+  if c.id is null then return coalesce(new, old); end if;
+  if v_pid is not null then select project_manager into v_pm from projects where id = v_pid; else v_pm := c.project_manager; end if;
+  perform notify(v_pm, 'client',
+    case when tg_op = 'INSERT' then 'New ' || new.kind || ' on ' || c.name else 'File removed from ' || c.name end,
+    coalesce(new.name, old.name), case when v_pid is not null then '#/projects?open=' || v_pid || '&tab=files' else '#/clients?open=' || c.id end);
+  return coalesce(new, old);
+end $$;
+
+-- A converted lead tells the managers what comes next
+create or replace function public.lead_convert(p_lead bigint) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := assert_active(); l leads%rowtype; v_client bigint; v_cur text;
+begin
+  if not perm('leads', 'edit') then raise exception 'You don''t have permission to convert leads'; end if;
+  select * into l from leads where id = p_lead and workspace_id = current_workspace() for update;
+  if not found then raise exception 'Lead not found'; end if;
+  if l.status <> 'won' then raise exception 'Mark the lead as won before converting it'; end if;
+  if l.client_id is not null then return l.client_id; end if;
+  select currency into v_cur from app_settings where workspace_id = l.workspace_id;
+  insert into clients (workspace_id, name, contact_name, email, phone, website, country, services, notes, lead_id, monthly_retainer, created_by)
+  values (l.workspace_id, coalesce(nullif(l.company, ''), l.contact_name), l.contact_name, l.email, l.phone, l.website, l.country, l.service, l.notes, l.id,
+          case when upper(l.currency) = upper(coalesce(v_cur, 'USD')) then l.budget end, v_uid)
+  returning id into v_client;
+  update leads set client_id = v_client, converted_at = now() where id = p_lead;
+  perform log_event('lead_converted', 'lead', p_lead::text, 'Converted "' || l.company || '" to a client', jsonb_build_object('client_id', v_client));
+  perform notify_managers('client', 'New client: ' || l.company, member_name(v_uid) || ' converted a won lead. Create a project and assign a Project Manager.', '#/clients?open=' || v_client, l.workspace_id);
+  return v_client;
+end $$;
+
+-- 15.9 Row Level Security -------------------------------------------------------------------------------------
+alter table public.projects               enable row level security;
+alter table public.project_members        enable row level security;
+alter table public.project_requirements   enable row level security;
+alter table public.staffing_requests      enable row level security;
+alter table public.staffing_request_items enable row level security;
+alter table public.request_comments       enable row level security;
+
+do $$ declare t text; begin
+  foreach t in array array['projects', 'project_members', 'project_requirements', 'staffing_requests', 'staffing_request_items', 'request_comments'] loop
+    execute format('drop policy if exists tenant_isolation on public.%I', t);
+    execute format('create policy tenant_isolation on public.%I as restrictive for all to authenticated
+                      using (workspace_id = (select public.current_workspace()))
+                      with check (workspace_id = (select public.current_workspace()))', t);
+  end loop;
+end $$;
+
+drop policy if exists projects_read on public.projects;
+create policy projects_read on public.projects for select to authenticated
+  using ((select public.perm('projects', 'view'))
+         or (project_manager = (select auth.uid()) and (select public.pm_perm('projects', 'view')))
+         or public.is_project_member(id, (select auth.uid())));
+drop policy if exists projects_insert on public.projects;
+create policy projects_insert on public.projects for insert to authenticated with check ((select public.perm('projects', 'edit')));
+drop policy if exists projects_update on public.projects;
+create policy projects_update on public.projects for update to authenticated
+  using ((select public.perm('projects', 'edit')) or (project_manager = (select auth.uid()) and (select public.pm_perm('projects', 'edit'))))
+  with check ((select public.perm('projects', 'edit')) or (project_manager = (select auth.uid()) and (select public.pm_perm('projects', 'edit'))));
+drop policy if exists projects_delete on public.projects;
+create policy projects_delete on public.projects for delete to authenticated
+  using ((select public.perm('projects', 'delete')) or (project_manager = (select auth.uid()) and (select public.pm_perm('projects', 'delete'))));
+
+drop policy if exists project_members_read on public.project_members;
+create policy project_members_read on public.project_members for select to authenticated
+  using (member_id = (select auth.uid()) or public.can_project(project_id, 'view'));
+
+-- Requests: the admin / managers and the Project Manager of that project
+drop policy if exists staffing_read on public.staffing_requests;
+create policy staffing_read on public.staffing_requests for select to authenticated
+  using ((select public.is_manager()) or requested_by = (select auth.uid()) or public.is_project_lead(project_id));
+drop policy if exists staffing_items_read on public.staffing_request_items;
+create policy staffing_items_read on public.staffing_request_items for select to authenticated
+  using (exists (select 1 from public.staffing_requests r where r.id = request_id
+                  and ((select public.is_manager()) or r.requested_by = (select auth.uid()) or public.is_project_lead(r.project_id))));
+drop policy if exists request_comments_read on public.request_comments;
+create policy request_comments_read on public.request_comments for select to authenticated
+  using (exists (select 1 from public.staffing_requests r where r.id = request_id
+                  and ((select public.is_manager()) or r.requested_by = (select auth.uid()) or public.is_project_lead(r.project_id))));
+
+drop policy if exists requirements_read on public.project_requirements;
+create policy requirements_read on public.project_requirements for select to authenticated using (public.can_project(project_id, 'view'));
+drop policy if exists requirements_insert on public.project_requirements;
+create policy requirements_insert on public.project_requirements for insert to authenticated with check (public.can_manage_project(project_id));
+drop policy if exists requirements_update on public.project_requirements;
+create policy requirements_update on public.project_requirements for update to authenticated
+  using (public.can_manage_project(project_id)) with check (public.can_manage_project(project_id));
+drop policy if exists requirements_delete on public.project_requirements;
+create policy requirements_delete on public.project_requirements for delete to authenticated using (public.can_manage_project(project_id));
+
+-- Clients: the Project Manager / members of one of its projects see (and a PM edits) the client
+drop policy if exists clients_read on public.clients;
+create policy clients_read on public.clients for select to authenticated
+  using ((select public.perm('clients', 'view'))
+         or (project_manager = (select auth.uid()) and (select public.pm_perm('clients', 'view')))
+         or public.client_via_project(id, 'view'));
+drop policy if exists clients_update on public.clients;
+create policy clients_update on public.clients for update to authenticated
+  using ((select public.perm('clients', 'edit')) or (project_manager = (select auth.uid()) and (select public.pm_perm('clients', 'edit'))) or public.client_via_project(id, 'edit'))
+  with check ((select public.perm('clients', 'edit')) or (project_manager = (select auth.uid()) and (select public.pm_perm('clients', 'edit'))) or public.client_via_project(id, 'edit'));
+
+-- Files: client-wide files follow the client; project files follow the project
+drop policy if exists files_read on public.client_files;
+create policy files_read on public.client_files for select to authenticated
+  using (public.can_client(client_id, 'view') or (project_id is not null and public.can_project(project_id, 'view')));
+drop policy if exists files_insert on public.client_files;
+create policy files_insert on public.client_files for insert to authenticated
+  with check (public.can_client(client_id, 'edit') or (project_id is not null and public.can_project(project_id, 'edit')));
+drop policy if exists files_delete on public.client_files;
+create policy files_delete on public.client_files for delete to authenticated
+  using (public.can_client(client_id, 'delete') or (project_id is not null and public.can_project(project_id, 'delete')));
+
+-- Tasks: the Project Manager creates and manages tasks for the project's members
+drop policy if exists tasks_read on public.tasks;
+create policy tasks_read on public.tasks for select to authenticated
+  using (assigned_to = (select auth.uid()) or (select public.is_manager())
+         or (client_id is not null and public.is_client_pm(client_id))
+         or (project_id is not null and public.is_project_pm(project_id)));
+drop policy if exists tasks_admin_insert on public.tasks;
+create policy tasks_admin_insert on public.tasks for insert to authenticated
+  with check ((select public.is_manager())
+              or (project_id is not null and public.can_manage_project(project_id)
+                  and (assigned_to is null or assigned_to = (select auth.uid()) or public.is_project_member(project_id, assigned_to)))
+              or (project_id is null and client_id is not null and public.is_client_pm(client_id)));
+drop policy if exists tasks_admin_update on public.tasks;
+create policy tasks_admin_update on public.tasks for update to authenticated
+  using ((select public.is_manager())
+         or (project_id is not null and public.can_manage_project(project_id))
+         or (client_id is not null and public.is_client_pm(client_id)))
+  with check ((select public.is_manager())
+              or (project_id is not null and public.can_manage_project(project_id)
+                  and (assigned_to is null or assigned_to = (select auth.uid()) or public.is_project_member(project_id, assigned_to)))
+              or (project_id is null and client_id is not null and public.is_client_pm(client_id)));
+drop policy if exists tasks_admin_delete on public.tasks;
+create policy tasks_admin_delete on public.tasks for delete to authenticated
+  using ((select public.is_manager())
+         or (project_id is not null and public.can_manage_project(project_id) and created_by = (select auth.uid()))
+         or (client_id is not null and public.is_client_pm(client_id) and created_by = (select auth.uid())));
+
+drop policy if exists comments_read on public.task_comments;
+create policy comments_read on public.task_comments for select to authenticated using (public.can_see_task(task_id));
+drop policy if exists comments_insert on public.task_comments;
+create policy comments_insert on public.task_comments for insert to authenticated
+  with check (author_id = (select auth.uid()) and public.can_see_task(task_id));
+
+revoke all on public.projects, public.project_members, public.project_requirements, public.staffing_requests,
+              public.staffing_request_items, public.request_comments from anon, authenticated;
+grant select, insert, delete on public.projects to authenticated;
+grant update (name, description, status, project_manager, start_date, due_date, website_url, socials) on public.projects to authenticated;
+grant select on public.project_members, public.staffing_requests, public.staffing_request_items, public.request_comments to authenticated;
+grant select, insert, delete on public.project_requirements to authenticated;
+grant update (title, details, is_done, sort) on public.project_requirements to authenticated;
+
+-- Storage: files live under "<workspace>/<client>/<file>" or "<workspace>/<client>/p<project>/<file>"
+do $$ begin
+  if exists (select 1 from pg_namespace where nspname = 'storage') then
+    execute 'drop policy if exists "client files read" on storage.objects';
+    execute 'create policy "client files read" on storage.objects for select to authenticated using (bucket_id = ''client-files'' and public.can_storage_file(name, ''view''))';
+    execute 'drop policy if exists "client files upload" on storage.objects';
+    execute 'create policy "client files upload" on storage.objects for insert to authenticated with check (bucket_id = ''client-files'' and public.can_storage_file(name, ''edit''))';
+    execute 'drop policy if exists "client files delete" on storage.objects';
+    execute 'create policy "client files delete" on storage.objects for delete to authenticated using (bucket_id = ''client-files'' and public.can_storage_file(name, ''delete''))';
+  end if;
+end $$;
+
+-- 15.10 Deleting a person or a workspace also removes this data ---------------------------------------
+drop table if exists public.activity_log;   -- the old staffing feed; everything now goes to activity_logs
+
+create or replace function public.purge_person_activity(p_id uuid) returns void
+language sql security definer set search_path = public as $$
+  delete from public.activity_logs where actor_id = p_id or subject_id = p_id;
+$$;
+revoke all on function public.purge_person_activity(uuid) from public, anon, authenticated;
+
+create or replace function public.purge_workspace(p_id uuid) returns uuid[]
+language plpgsql security definer set search_path = public as $$
+declare ids uuid[];
+begin
+  perform set_config('webnox.purge', 'on', true);
+  select coalesce(array_agg(id), '{}') into ids from public.profiles where workspace_id = p_id and is_master = false;
+  delete from public.activity_logs        where workspace_id = p_id;
+  delete from public.activity_intervals   where workspace_id = p_id;
+  delete from public.user_sessions        where workspace_id = p_id;
+  delete from public.task_time_entries    where workspace_id = p_id;
+  delete from public.task_comments        where workspace_id = p_id;
+  delete from public.tasks                where workspace_id = p_id;
+  delete from public.client_files         where workspace_id = p_id;
+  delete from public.request_comments     where workspace_id = p_id;
+  delete from public.staffing_request_items where workspace_id = p_id;
+  delete from public.staffing_requests    where workspace_id = p_id;
+  delete from public.project_members      where workspace_id = p_id;
+  delete from public.project_requirements where workspace_id = p_id;
+  delete from public.projects             where workspace_id = p_id;
+  delete from public.leads                where workspace_id = p_id;
+  delete from public.clients              where workspace_id = p_id;
+  delete from public.role_permissions     where workspace_id = p_id;
+  delete from public.app_settings         where workspace_id = p_id;
+  delete from public.notifications        where workspace_id = p_id;
+  delete from public.workspace_roles      where workspace_id = p_id;
+  delete from public.subscription_payments where workspace_id = p_id;
+  delete from public.subscriptions        where workspace_id = p_id;
+  delete from public.billing_log          where workspace_id = p_id;
+  delete from public.master_access_log    where workspace_id = p_id;
+  delete from public.profiles             where workspace_id = p_id and is_master = false;
+  delete from public.workspaces           where id = p_id;
+  return ids;
+end $$;
+revoke all on function public.purge_workspace(uuid) from public, anon, authenticated;
+
+-- 15.11 Functions: who may call what ------------------------------------------------------------------------
+revoke execute on function
+  public.eco_fill_workspace(), public.project_link_before(), public.projects_before_write(), public.projects_after_write(),
+  public.requirements_before_write(), public.requirements_after_write(), public.tasks_notify(), public.files_notify(),
+  public.agent_fits(uuid, bigint), public.staffing_label(bigint), public.seed_role_permissions(uuid),
+  public.is_project_pm(bigint), public.is_project_lead(bigint), public.is_project_member(bigint, uuid), public.is_client_pm(bigint),
+  public.can_project(bigint, text), public.can_manage_project(bigint), public.client_via_project(bigint, text),
+  public.can_storage_file(text, text), public.can_see_task(bigint), public.task_review(bigint, boolean, text),
+  public.staffing_request_create(bigint, jsonb, text), public.staffing_request_decide(bigint, text, text),
+  public.staffing_request_comment(bigint, text), public.project_member_add(bigint, uuid, bigint),
+  public.project_member_remove(bigint), public.project_candidates(bigint), public.lead_convert(bigint)
+  from public, anon, authenticated;
+grant execute on function
+  public.is_project_pm(bigint), public.is_project_lead(bigint), public.is_project_member(bigint, uuid), public.is_client_pm(bigint),
+  public.can_project(bigint, text), public.can_manage_project(bigint), public.client_via_project(bigint, text),
+  public.can_storage_file(text, text), public.can_see_task(bigint), public.task_review(bigint, boolean, text),
+  public.staffing_request_create(bigint, jsonb, text), public.staffing_request_decide(bigint, text, text),
+  public.staffing_request_comment(bigint, text), public.project_member_add(bigint, uuid, bigint),
+  public.project_member_remove(bigint), public.project_candidates(bigint), public.lead_convert(bigint)
+  to authenticated;
+
+-- 15.12 One-time move of the first Webnox version's test projects ------------------------------------------
+-- Each old project becomes a client (named after its "client" text, or the project) + a project; its
+-- staffing requests, slots, comments and team come along. Nothing is notified. Runs only once.
+do $$
+declare lp record; v_client bigint; v_pid bigint;
+begin
+  if to_regclass('public.legacy_projects') is null then return; end if;
+  alter table public.projects disable trigger projects_after;
+  alter table public.clients  disable trigger clients_notify;
+  for lp in select * from public.legacy_projects order by created_at loop
+    select id into v_client from public.clients
+     where workspace_id = lp.workspace_id and lower(name) = lower(coalesce(nullif(btrim(lp.client), ''), lp.name)) limit 1;
+    if v_client is null then
+      insert into public.clients (workspace_id, name, status, created_by)
+      values (lp.workspace_id, coalesce(nullif(btrim(lp.client), ''), lp.name), 'active', lp.created_by) returning id into v_client;
+    end if;
+    insert into public.projects (workspace_id, client_id, name, description, status, project_manager, created_by, created_at, legacy_id)
+    values (lp.workspace_id, v_client, lp.name, coalesce(lp.description, ''), lp.status, lp.manager_id, lp.created_by, lp.created_at, lp.id)
+    returning id into v_pid;
+  end loop;
+
+  insert into public.staffing_requests (workspace_id, project_id, requested_by, status, note, decided_by, decided_at, decision_note, created_at, legacy_id)
+  select r.workspace_id, p.id, r.requested_by, r.status, r.note, r.decided_by, r.decided_at, r.decision_note, r.created_at, r.id
+    from public.legacy_staffing_requests r join public.projects p on p.legacy_id = r.project_id;
+
+  insert into public.staffing_request_items (workspace_id, request_id, designation, department, qty, legacy_id)
+  select n.workspace_id, n.id, i.designation, i.department, i.qty, i.id
+    from public.legacy_staffing_request_items i join public.staffing_requests n on n.legacy_id = i.request_id;
+
+  insert into public.request_comments (workspace_id, request_id, author_id, body, created_at)
+  select n.workspace_id, n.id, c.author_id, c.body, c.created_at
+    from public.legacy_request_comments c join public.staffing_requests n on n.legacy_id = c.request_id;
+
+  insert into public.project_members (workspace_id, project_id, member_id, item_id, role_label, added_by, added_at)
+  select p.workspace_id, p.id, m.user_id, ni.id, coalesce(ni.designation, 'Member'), m.added_by, m.added_at
+    from public.legacy_project_members m
+    join public.projects p on p.legacy_id = m.project_id
+    left join public.staffing_request_items ni on ni.legacy_id = m.item_id
+   where m.user_id is distinct from p.project_manager;
+
+  alter table public.projects enable trigger projects_after;
+  alter table public.clients  enable trigger clients_notify;
+  drop table public.legacy_project_members;
+  drop table public.legacy_request_comments;
+  drop table public.legacy_staffing_request_items;
+  drop table public.legacy_staffing_requests;
+  drop table public.legacy_projects;
+end $$;
+
+drop function if exists public.project_manager_guard();
+drop function if exists public.project_member_guard();

@@ -102,7 +102,6 @@ function mountShell(sb, prof, cfg) {
         '<header class="top">' +
           '<button class="icon-btn menu-btn" id="menu" type="button" aria-label="Open menu">' + icon('menu', 20) + '</button>' +
           '<h1 class="page-title" id="pageTitle"></h1>' +
-          (cfg.bell ? '<div class="bell-wrap" id="bellWrap"></div>' : '') +
           '<div class="avatar-wrap">' +
             '<button class="avatar" id="avatar" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">' + esc(initials) + '</button>' +
             '<div class="menu" id="avatarMenu" hidden>' +
@@ -154,7 +153,6 @@ function mountShell(sb, prof, cfg) {
     }));
   });
 
-  if (cfg.bell) import('/js/notify.js').then((m) => m.mountBell(sb, document.getElementById('bellWrap'))).catch(() => {});
 
   // Router
   async function route() {

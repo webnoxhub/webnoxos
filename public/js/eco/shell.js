@@ -9,7 +9,7 @@ import { refreshTimer, mountTimerPill } from './timer.js';
 import { esc, icon, avatar, fullName, closeDrawer, ROLE_ICONS, toast } from './ui.js';
 
 // Pages that exist so far. Each phase adds its pages here.
-const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients']);
+const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients', 'projects']);
 
 const ADMIN_NAV = [
   { route: 'dashboard', label: 'Dashboard', icon: 'dashboard', page: 'admin-dashboard' },
@@ -63,12 +63,13 @@ export async function start({ profile: boot, workspace }) {
   state.user = session.user;
   state.workspace = workspace;
 
-  const [profile, roles, settings, permRows, switches] = await Promise.all([
+  const [profile, roles, settings, permRows, switches, projectOf] = await Promise.all([
     q(supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()),
     q(supabase.from('team_roles').select('*').order('sort')),
     q(supabase.from('app_settings').select('*').eq('workspace_id', workspace.id).maybeSingle()),
     q(supabase.from('role_permissions').select('role_key, module, can_view, can_edit, can_delete')).catch(() => []),
     q(supabase.from('workspace_roles').select('role_key, active, can_edit').eq('workspace_id', workspace.id)).catch(() => []),
+    q(supabase.from('project_members').select('project_id').eq('member_id', session.user.id).eq('status', 'approved')).catch(() => []),
   ]);
   if (!profile || profile.status !== 'active') { await supabase.auth.signOut(); return location.replace('/login.html?m=inactive'); }
 
@@ -81,7 +82,7 @@ export async function start({ profile: boot, workspace }) {
   state.permRows = permRows;
   state.roleSwitches = Object.fromEntries(switches.map((r) => [r.role_key, { active: r.active, can_edit: r.can_edit }]));
   state.agentOf = [];
-  state.projectOf = [];
+  state.projectOf = (projectOf || []).map((r) => r.project_id);
   computePerms();
   setTimezone(state.settings.timezone);
 
@@ -254,6 +255,10 @@ async function route() {
   let item = nav.find((n) => n.route === path);
   let arg = null;
 
+  if (!item && /^project\/\d+$/.test(path) && nav.some((n) => n.route === 'projects')) {
+    arg = path.slice(8);
+    item = { route: 'projects', page: 'project', label: 'Project' };
+  }
   if (!item && !state.isOwner && path.startsWith('role/')) {
     arg = path.slice(5);
     if (state.myRoles.includes(arg)) item = { route: path, page: 'my-tasks', label: state.roles.find((r) => r.key === arg)?.name };

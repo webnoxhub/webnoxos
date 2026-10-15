@@ -186,7 +186,7 @@ await as(M1, async () => {
   ok((await q(`select count(*)::int c from task_time_entries where user_id=$1 and ended_at is null`, [M1]))[0].c === 0, 'submitting stops the running timer');
   await expectErr(() => q(`select timer_start($1)`, [t1.id]), 'timer blocked while in review', /in review/);
   await expectErr(() => q(`select task_set_status($1, 'completed')`, [t1.id]), 'member cannot complete', /can't move/);
-  await expectErr(() => q(`select task_review($1, true)`, [t1.id]), 'member cannot approve', /admin or a manager/);
+  await expectErr(() => q(`select task_review($1, true)`, [t1.id]), 'member cannot approve', /can review this task/);
 });
 await as(A, async () => {
   await expectErr(() => q(`select task_review($1, false, '')`, [t1.id]), 'revision needs a note', /note/);
