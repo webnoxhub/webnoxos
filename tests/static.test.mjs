@@ -44,7 +44,10 @@ check('refusal sentence is defined exactly once and shared by both logins',
   (js.match(/These details don't work here\./g) || []).length === 1 && /REFUSED/.test(js));
 check('both logins use the 600 ms failure floor', (js.match(/FLOOR_MS/g) || []).length >= 3);
 check('no console logging in auth.js', !/console\./.test(js));
-check('no localStorage use in auth.js', !/localStorage/.test(js));
+// Only the business sign-in may remember a workspace; the Master page never touches browser storage.
+const masterPart = js.slice(js.indexOf('export async function initMasterLogin'), js.indexOf('export async function initSetPassword'));
+check('Master sign-in never touches localStorage', !/localStorage|webnox_last_workspace/.test(masterPart));
+check('only the business sign-in uses localStorage', (js.match(/localStorage/g) || []).length > 0 && !/localStorage/.test(js.slice(js.indexOf('export async function initSetPassword'), js.indexOf('export async function initBusinessLogin'))));
 
 const robots = fs.readFileSync(path.join(root, 'robots.txt'), 'utf8');
 check('robots.txt disallows the route', robots.includes('Disallow: /' + ROUTE));

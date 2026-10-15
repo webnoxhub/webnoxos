@@ -204,12 +204,27 @@ export async function initBusinessLogin() {
   const forgot = document.getElementById('blForgot');
   const forgotText = document.getElementById('blForgotText');
 
-  // ?w=<slug> shows the business name. The server answers {} for anything that is not a live workspace.
-  const wslug = (new URLSearchParams(location.search).get('w') || '').toLowerCase();
-  if (/^[a-z0-9-]{1,40}$/.test(wslug)) {
+  // ?w=<slug> shows the business name; with no ?w the workspace this browser last signed in to is used.
+  // The server answers {} for anything that is not a live workspace.
+  const LAST = 'webnox_last_workspace';
+  const SLUG = /^[a-z0-9-]{1,40}$/;
+  const store = {
+    get() { try { return (localStorage.getItem(LAST) || '').toLowerCase(); } catch { return ''; } },
+    set(v) { try { localStorage.setItem(LAST, v); } catch { /* private window */ } },
+    clear() { try { localStorage.removeItem(LAST); } catch { /* ignore */ } },
+  };
+  const urlSlug = (new URLSearchParams(location.search).get('w') || '').toLowerCase();
+  const remembered = !urlSlug ? store.get() : '';
+  const wslug = SLUG.test(urlSlug) ? urlSlug : (SLUG.test(remembered) ? remembered : '');
+  if (wslug) {
     fetch('/api/public/workspace-brand', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: wslug }) })
       .then((r) => r.json()).then((b) => {
-        if (b && b.name) { const t = document.getElementById('blTitle'); t.textContent = (b.logo_only ? 'Sign in' : 'Sign in to ' + b.name); document.title = 'Sign in · ' + b.name; applyBrand(b.name, b.logo_url, b.logo_only); }
+        if (b && b.name) {
+          const t = document.getElementById('blTitle'); t.textContent = (b.logo_only ? 'Sign in' : 'Sign in to ' + b.name); document.title = 'Sign in · ' + b.name;
+          applyBrand(b.name, b.logo_url, b.logo_only);
+          const sw = document.getElementById('blSwitch');
+          if (sw) { sw.hidden = false; sw.addEventListener('click', () => { store.clear(); location.replace('/login.html'); }); }
+        } else if (remembered) store.clear();   // that workspace is gone: forget it
       }).catch(() => { /* plain sign-in page */ });
   }
 
@@ -263,8 +278,11 @@ export async function initBusinessLogin() {
       if (!sb) throw new Error('x');
       const { data, error } = await sb.auth.signInWithPassword({ email: mail, password: pw });
       if (!error && data && data.user) {
-        const { data: p } = await sb.from('profiles').select('is_master').eq('id', data.user.id).maybeSingle();
+        const { data: p } = await sb.from('profiles').select('is_master,workspace_id').eq('id', data.user.id).maybeSingle();
         ok = !!p && p.is_master === false;
+        if (ok) {   // remember this business for the next visit to the sign-in page
+          try { const { data: w } = await sb.from('workspaces').select('slug').eq('id', p.workspace_id).maybeSingle(); if (w && w.slug) store.set(w.slug); } catch { /* not important */ }
+        }
       }
     } catch { ok = false; }
 

@@ -140,6 +140,8 @@
 .bl-spin{display:none;position:absolute;width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:ml-spin .7s linear infinite}
 .bl-submit.is-busy .bl-submit-text{opacity:0}
 .bl-submit.is-busy .bl-spin{display:block}
+.bl-switch{display:block;margin:-6px 0 16px;padding:0;border:0;background:none;color:#4F46E5;font:500 13px/1.4 inherit;cursor:pointer}
+.bl-switch[hidden]{display:none}
 .bl-forgot{display:block;margin:16px 0 0;padding:0;border:0;background:none;color:#4F46E5;font:500 13px/1.4 inherit;cursor:pointer}
 .bl-forgot-text{margin:8px 0 0;font-size:13px;color:#334155}
 .bl-track{margin:24px 0 0;font-size:12px;color:#64748B}
