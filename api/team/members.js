@@ -92,14 +92,28 @@ async function edit(admin, me, target, activeRoles, req, res) {
     else if (!canAssignType(me.account_type, v.account_type)) errors.push('You cannot set this type');
   }
   if (v.status !== undefined && self) errors.push('You cannot change your own status');
+  if (v.email !== undefined && v.email === String(target.email || '').toLowerCase()) delete v.email;   // unchanged
+  if (v.email !== undefined && self) errors.push('You cannot change your own email here');
   if (errors.length) return send(res, 400, { error: errors.join('; ') });
   const finalType = v.account_type || target.account_type;
   if (finalType !== 'member') { if (target.reports_to || v.reports_to !== undefined || v.account_type) v.reports_to = null; }
   else if (v.reports_to && !(await validBoss(admin, target.workspace_id, v.reports_to, target.id))) return send(res, 400, { error: 'Pick a manager from this workspace' });
   if (!Object.keys(v).length) return send(res, 200, { ok: true });
 
+  // A new email changes the person's sign-in too: sign-in first, then the profile; undo if the second step fails.
+  let oldEmail = null;
+  if (v.email !== undefined) {
+    const { data: taken } = await admin.from('profiles').select('id').eq('email', v.email).neq('id', target.id).maybeSingle();
+    if (taken) return send(res, 409, { error: 'This email already has an account.' });
+    const r = await admin.auth.admin.updateUserById(target.id, { email: v.email, email_confirm: true });
+    if (r.error) return send(res, 502, { error: r.error.message });
+    oldEmail = target.email;
+  }
   const { error } = await admin.from('profiles').update(v).eq('id', target.id).eq('workspace_id', target.workspace_id);
-  if (error) return send(res, 502, { error: error.message });
+  if (error) {
+    if (oldEmail) { try { await admin.auth.admin.updateUserById(target.id, { email: oldEmail, email_confirm: true }); } catch { /* best effort */ } }
+    return send(res, 502, { error: error.message });
+  }
   // Switched off: end his open sessions and pause his task timer right away.
   if (v.status === 'inactive') await admin.rpc('close_member_sessions', { p_member: target.id });
   send(res, 200, { ok: true });

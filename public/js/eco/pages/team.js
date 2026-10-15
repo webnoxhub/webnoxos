@@ -137,7 +137,7 @@ function memberForm({ d, person, onDone }) {
     title: esc(editing ? person.name || 'Team member' : 'Add team member'), wide: true,
     body: `<div class="form-grid" id="mf">
       <div class="field span-2"><label for="tName">Full name</label><input id="tName" class="input" maxlength="80" value="${esc(person?.name || '')}"></div>
-      <div class="field"><label for="tEmail">Email</label><input id="tEmail" class="input" type="email" autocomplete="off" spellcheck="false" ${editing ? 'readonly' : ''} value="${esc(person?.email || '')}"></div>
+      <div class="field"><label for="tEmail">Email</label><input id="tEmail" class="input" type="email" autocomplete="off" spellcheck="false" ${editing && isSelf ? 'readonly' : ''} value="${esc(person?.email || '')}"></div>
       <div class="field"><label for="tPhone">Phone</label><input id="tPhone" class="input" inputmode="tel" value="${esc(person?.phone || '')}"></div>
       <div class="field"><label for="tDept">Department</label><input id="tDept" class="input" list="dl-dept" maxlength="60" placeholder="Select or type" value="${esc(person?.department || '')}"></div>
       <div class="field"><label for="tDesig">Designation</label><input id="tDesig" class="input" list="dl-desig" maxlength="60" placeholder="Select or type" value="${esc(person?.job_title || '')}"></div>
@@ -203,7 +203,7 @@ function memberForm({ d, person, onDone }) {
   $('#tSave').onclick = async (e) => {
     const body = payload();
     if (!body.name) return showErr('Name is required.');
-    if (!editing) { body.email = $('#tEmail').value.trim(); if (!/^\S+@\S+\.\S+$/.test(body.email)) return showErr(body.email ? 'Enter a valid email address.' : 'Email is required.'); }
+    if (!editing || !isSelf) { body.email = $('#tEmail').value.trim(); if (!/^\S+@\S+\.\S+$/.test(body.email)) return showErr(body.email ? 'Enter a valid email address.' : 'Email is required.'); }
     showErr('');
     await busy(e.currentTarget, async () => {
       try {

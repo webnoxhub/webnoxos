@@ -22,6 +22,12 @@ r = checkMember({ name: 'A', email: 'bad@gmail.cop,' }, active, { create: true }
 ok('bad email refused', r.errors.some((e) => /email/i.test(e)));
 r = checkMember({ name: 'A', email: 'a@b.com', roles: ['lead_gen'] }, active, { create: true });
 ok('role not switched on in this workspace refused', r.errors.some((e) => /Role not available/.test(e)));
+r = checkMember({ email: ' New@Example.com ' }, active, { create: false });
+ok('edit: a new email is accepted and lower-cased', r.errors.length === 0 && r.value.email === 'new@example.com', r.errors.join());
+r = checkMember({ email: 'nope' }, active, { create: false });
+ok('edit: a bad email is refused', r.errors.some((e) => /email/i.test(e)));
+r = checkMember({ phone: '+92 300 1234567' }, active, { create: false });
+ok('edit: leaving email out leaves it alone', r.errors.length === 0 && r.value.email === undefined, r.errors.join());
 r = checkMember({ name: 'A', email: 'a@b.com', roles: ['ceo'] }, active, { create: true });
 ok('unknown role refused', r.errors.length > 0);
 r = checkMember({ name: 'A', email: 'a@b.com', joining_date: '2026-02-31' }, active, { create: true });
