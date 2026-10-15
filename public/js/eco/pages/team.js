@@ -36,7 +36,7 @@ export async function render({ el }) {
   }
 }
 
-const who = (p, sub) => `<div class="who">${avatar({ ...p, first_name: (p.name || '?').split(' ')[0], last_name: (p.name || '').split(' ').slice(1).join(' ') })}<div><div class="name">${esc(p.name || '—')}</div><div class="sub">${esc(sub || '')}</div></div></div>`;
+const who = (p, sub, sub2) => `<div class="who">${avatar({ ...p, first_name: (p.name || '?').split(' ')[0], last_name: (p.name || '').split(' ').slice(1).join(' ') })}<div><div class="name">${esc(p.name || '—')}</div><div class="sub">${esc(sub || '')}</div>${sub2 ? `<div class="sub">${esc(sub2)}</div>` : ''}</div></div>`;
 const bossOf = (p, all) => { const b = p.reports_to && all.find((x) => x.id === p.reports_to); return b ? `<div class="sub">Reports to ${esc(b.name || '')}</div>` : ''; };
 const chips = (p) => `<div class="chips">${rolesOf(p).map((r) => roleChip(r, state.roles)).join('') || '<span class="muted small">No role</span>'}</div>`;
 
@@ -88,7 +88,7 @@ function paintManager(el, d, reload) {
       ${list.map((p) => {
         const st = stOf(p), pr = presence.get(p.id);
         return `<tr class="${p.manageable ? 'clickable' : ''}" data-id="${esc(p.id)}" ${p.manageable ? 'tabindex="0"' : ''}>
-          <td>${who(p, p.job_title || p.email)}${p.job_title ? `<div class="sub">${esc(p.email || '')}</div>` : ''}</td>
+          <td>${who(p, p.job_title || p.email, p.job_title ? p.email : '')}</td>
           <td>${esc(TYPE_LABEL[p.account_type] || '')}</td>
           <td>${esc(p.department || '—')}${bossOf(p, people)}</td>
           <td>${chips(p)}</td>
