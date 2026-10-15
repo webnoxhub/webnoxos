@@ -9,7 +9,8 @@ export const state = {
   isAdmin: false,   // admin OR manager role: workspace-wide management screens
   perms: {},        // { leads: {view, edit, delete}, clients: {...}, finance: {...} }
   pmPerms: {},      // what the Project Manager role allows on assigned clients
-  permRows: [],     // raw role_permissions rows
+  permRows: [],     // raw role_permissions rows (this workspace)
+  roleSwitches: {}, // { role_key: {active, can_edit} } the Master's switches for this workspace
   projectOf: [],    // project ids the user is an approved member of
 };
 export const roleName = (key) => state.roles.find((r) => r.key === key)?.name || key;
@@ -24,8 +25,12 @@ export function computePerms() {
     if (state.isAdmin) { state.perms[m] = { ...all }; state.pmPerms[m] = { ...all }; continue; }
     const p = none(); const pm = none();
     for (const r of state.permRows.filter((x) => x.module === m && state.myRoles.includes(x.role_key))) {
+      const sw = state.roleSwitches[r.role_key];
+      if (!sw || !sw.active) continue;                        // the Master switched this role off
       const target = r.role_key === 'project_manager' ? pm : p;
-      target.view ||= r.can_view; target.edit ||= r.can_edit; target.delete ||= r.can_delete;
+      target.view ||= r.can_view;
+      target.edit ||= r.can_edit && sw.can_edit;              // edit / delete also need the Master's "allow to edit"
+      target.delete ||= r.can_delete && sw.can_edit;
     }
     state.perms[m] = p; state.pmPerms[m] = pm;
   }

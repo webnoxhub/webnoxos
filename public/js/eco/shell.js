@@ -9,7 +9,7 @@ import { refreshTimer, mountTimerPill } from './timer.js';
 import { esc, icon, avatar, fullName, closeDrawer, ROLE_ICONS, toast } from './ui.js';
 
 // Pages that exist so far. Each phase adds its pages here.
-const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings']);
+const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients']);
 
 const ADMIN_NAV = [
   { route: 'dashboard', label: 'Dashboard', icon: 'dashboard', page: 'admin-dashboard' },
@@ -63,10 +63,12 @@ export async function start({ profile: boot, workspace }) {
   state.user = session.user;
   state.workspace = workspace;
 
-  const [profile, roles, settings] = await Promise.all([
+  const [profile, roles, settings, permRows, switches] = await Promise.all([
     q(supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()),
     q(supabase.from('team_roles').select('*').order('sort')),
     q(supabase.from('app_settings').select('*').eq('workspace_id', workspace.id).maybeSingle()),
+    q(supabase.from('role_permissions').select('role_key, module, can_view, can_edit, can_delete')).catch(() => []),
+    q(supabase.from('workspace_roles').select('role_key, active, can_edit').eq('workspace_id', workspace.id)).catch(() => []),
   ]);
   if (!profile || profile.status !== 'active') { await supabase.auth.signOut(); return location.replace('/login.html?m=inactive'); }
 
@@ -76,7 +78,8 @@ export async function start({ profile: boot, workspace }) {
   state.settings = settings || { workspace_id: workspace.id, timezone: 'Asia/Karachi', idle_minutes: 5, company_name: workspace.name, currency: 'USD' };
   state.isOwner = profile.account_type === 'admin';
   state.isAdmin = state.isOwner || profile.account_type === 'manager';
-  state.permRows = [];
+  state.permRows = permRows;
+  state.roleSwitches = Object.fromEntries(switches.map((r) => [r.role_key, { active: r.active, can_edit: r.can_edit }]));
   state.agentOf = [];
   state.projectOf = [];
   computePerms();

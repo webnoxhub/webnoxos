@@ -122,8 +122,14 @@ async function regenerate(admin, ws, req, res) {
 async function purge(admin, ws, req, res) {
   let body = {}; try { body = await readJson(req); } catch { /* empty is fine */ }
   if (String(body.confirm || '').trim().toLowerCase() !== String(ws.name).trim().toLowerCase()) return send(res, 400, { error: 'The name you typed does not match' });
+  const { data: files } = await admin.from('client_files').select('storage_path').eq('workspace_id', ws.id);
   const { data: ids, error } = await admin.rpc('purge_workspace', { p_id: ws.id });
   if (error) return send(res, 502, { error: error.message });
+  // Uploaded contracts and documents: best effort, the database rows are already gone.
+  try {
+    const paths = (files || []).map((f) => f.storage_path);
+    for (let i = 0; i < paths.length; i += 100) await admin.storage.from('client-files').remove(paths.slice(i, i + 100));
+  } catch { /* nothing more to do */ }
   let failed = 0;
   for (const id of ids || []) { const r = await admin.auth.admin.deleteUser(id); if (r.error) failed++; }
   send(res, 200, { ok: true, accounts_left: failed });

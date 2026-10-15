@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Submit a lead</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/eco.css">
+</head>
+<body class="public-page">
+  <main class="public-wrap">
+    <div class="brand" style="padding:0 0 22px">
+      <div class="brand-name"><span id="company">Lead form</span><small>Lead form</small></div>
+    </div>
+    <section class="panel public-card">
+      <div class="modal-head lead-head" style="padding:22px 24px 0">
+        <div><h1 style="font-size:18px">Add inbound or outreach lead</h1><p class="muted small">Enroll a new prospect into the pipeline</p></div>
+      </div>
+      <form id="form" novalidate style="padding:20px 24px 24px"><div id="fields"><p class="muted">Loading form…</p></div>
+        <input id="hp" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+        <div class="row" style="justify-content:flex-end;margin-top:18px"><button class="btn btn-primary btn-lg" type="submit" id="submit">Create lead</button></div>
+      </form>
+      <div id="done" class="hidden empty" style="padding:48px 24px">
+        <h3>Lead received</h3><p>Thanks. The team can see it now.</p>
+        <button class="btn btn-primary" id="again" style="margin-top:16px">Submit another lead</button>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/js/eco/public-form.js"></script>
+</body>
+</html>
