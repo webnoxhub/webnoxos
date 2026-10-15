@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign in · Webnox OS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;700;800&display=swap">
+  <link rel="stylesheet" href="/css/auth.css">
+</head>
+<body class="bl-body">
+  <div class="bl-split">
+
+    <aside class="bl-art">
+      <div class="bl-glow bl-glow-1" aria-hidden="true"></div>
+      <div class="bl-glow bl-glow-2" aria-hidden="true"></div>
+      <div class="bl-brand has-logo">
+        <span class="bl-badge has-logo" id="blBadge"><span id="blInit" hidden>WO</span><img class="bl-logo" id="blLogo" src="/logo.png" alt="Webnox OS"></span>
+        <div><p class="bl-brand-name" id="blBrand">Webnox OS</p><p class="bl-brand-sub">Team workspace</p></div>
+      </div>
+      <h2 class="bl-art-title">Every task, every hour, one hub.</h2>
+      <p class="bl-art-text">Assign work by role, run timers on tasks and see who is active right now.</p>
+      <div class="bl-demo" aria-hidden="true">
+        <div class="bl-row"><span>Sales</span><div class="bl-track-bar"><i class="seg s1"></i><i class="seg s2"></i><i class="tm t1"></i></div></div>
+        <div class="bl-row"><span>Lead gen</span><div class="bl-track-bar"><i class="seg s3"></i><i class="seg s4"></i><i class="tm t2"></i></div></div>
+        <div class="bl-row"><span>Cold calls</span><div class="bl-track-bar"><i class="seg s5"></i><i class="seg s6"></i><i class="tm t3"></i></div></div>
+        <div class="bl-legend"><span><i class="k k-a"></i>Active</span><span><i class="k k-i"></i>Idle</span><span><i class="k k-t"></i>Task timer</span></div>
+      </div>
+    </aside>
+
+    <main class="bl-main">
+      <section class="bl-card">
+        <h1 class="bl-title" id="blTitle">Sign in</h1>
+        <p class="bl-note" id="blNote" role="status" hidden></p>
+
+        <form id="blForm" novalidate autocomplete="on">
+          <div class="bl-field">
+            <label class="bl-label" for="blEmail">Email</label>
+            <input class="bl-input" id="blEmail" name="email" type="email" autocomplete="username"
+                   inputmode="email" spellcheck="false" autocapitalize="off" required>
+          </div>
+          <div class="bl-field">
+            <label class="bl-label" for="blPass">Password</label>
+            <div class="bl-pass">
+              <input class="bl-input" id="blPass" name="password" type="password" autocomplete="current-password" required>
+              <button class="bl-eye" id="blEye" type="button" aria-label="Show password" aria-pressed="false">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <p class="bl-error" id="blError" role="alert" aria-live="polite" hidden></p>
+
+          <button class="bl-submit" id="blSubmit" type="submit">
+            <span class="bl-submit-text">Sign in</span><span class="bl-spin" aria-hidden="true"></span>
+          </button>
+        </form>
+
+        <button class="bl-forgot" id="blForgot" type="button" aria-expanded="false">Forgot password?</button>
+        <p class="bl-forgot-text" id="blForgotText" hidden>Ask your admin for a new password link. They can send it to you on WhatsApp.</p>
+
+        <p class="bl-track">We record sign-in times, active and idle time, and task timers. We never record keystrokes,
+          screenshots, your camera or other apps.</p>
+      </section>
+    </main>
+
+  </div>
+  <footer class="bl-foot">© 2026 Powered by Webnox OS. All rights reserved.</footer>
+
+  <script type="module">
+    import { initBusinessLogin } from '/js/auth.js';
+    initBusinessLogin();
+  </script>
+  <script type="module" src="/js/logo.js"></script>
+</body>
+</html>

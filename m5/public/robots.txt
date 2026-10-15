@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /master-signin
+Disallow: /master-signin.html
+Disallow: /app.html
+Disallow: /set-password.html

@@ -1,0 +1,29 @@
+/* Webnox OS — Master world. Loaded only for the Master; overrides the same tokens, so every
+   shared component changes colour. Dark navy with cyan-to-indigo gradients. */
+body[data-world="master"]{
+  --bg:#0D1730; --canvas:#070D1A; --section:rgba(255,255,255,.05);
+  --ink:#F1F5FF; --ink-2:rgba(241,245,255,.78); --muted:rgba(241,245,255,.6); --line:rgba(255,255,255,.11);
+  --accent:#22D3EE; --accent-bg:rgba(34,211,238,.14);
+  --ok:#4ADE80; --warn:#FBBF24; --err:#F87171;
+  --ok-bg:rgba(74,222,128,.14); --warn-bg:rgba(251,191,36,.14); --err-bg:rgba(248,113,113,.15); --muted-bg:rgba(255,255,255,.09);
+  --radius:12px; --shadow:0 8px 24px rgba(2,6,16,.35);
+  --sb-bg:#050A14; --sb-ink:rgba(241,245,255,.78);
+  background:
+    radial-gradient(900px 500px at 0% 0%,rgba(8,145,178,.16),transparent 60%),
+    radial-gradient(900px 600px at 100% 100%,rgba(109,40,217,.14),transparent 60%),
+    #070D1A;
+  background-attachment:fixed;
+  color-scheme:dark;
+}
+body[data-world="master"] .sb{border-right-color:rgba(255,255,255,.08)}
+body[data-world="master"] .sb-head{background:linear-gradient(135deg,rgba(14,116,144,.35),rgba(109,40,217,.22))}
+body[data-world="master"] .top{background:rgba(13,23,48,.85);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+body[data-world="master"] .nav-item.is-active{background:rgba(255,255,255,.10)}
+body[data-world="master"] .avatar{color:#22D3EE;border-color:rgba(34,211,238,.4)}
+body[data-world="master"] .btn{background:linear-gradient(135deg,#0E7490 0%,#2563EB 52%,#6D28D9 100%);border-color:transparent;color:#fff}
+body[data-world="master"] .btn:hover{filter:brightness(1.1);background:linear-gradient(135deg,#0E7490 0%,#2563EB 52%,#6D28D9 100%)}
+body[data-world="master"] .fchip{background:rgba(255,255,255,.04)}
+body[data-world="master"] .fchip[aria-pressed="true"]{color:#22D3EE;border-color:#22D3EE}
+body[data-world="master"] .search:focus-within{box-shadow:0 0 0 3px rgba(34,211,238,.28)}
+body[data-world="master"] .toast{background:#1B2A4A}
+body[data-world="master"] :focus-visible{outline-color:#22D3EE}
