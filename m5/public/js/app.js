@@ -49,16 +49,20 @@ function fail(msg) {
 // ---------------------------------------------------------------------------
 async function memberWorld(sb, prof) {
   if (!prof.workspace_id) return leave(sb, 'noprofile');
+  // Everything the app needs starts downloading at once; the closed-workspace check runs alongside.
+  const shellP = import('/js/eco/shell.js');
+  const cssP = loadCss('/css/eco.css');
+  loadCss('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap').catch(() => {});
+  shellP.catch(() => {}); cssP.catch(() => {});
   const { data: ws } = await sb.from('workspaces').select('id,name,slug,status,logo_url,logo_only').eq('id', prof.workspace_id).maybeSingle();
   if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   // The workspace app has its own look: swap the Webnox stylesheet for the workspace one.
   document.querySelectorAll('link[href="/css/app.css"]').forEach((l) => l.remove());
-  await loadCss('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap');
-  await loadCss('/css/eco.css');
+  await cssP;
   const boot = document.getElementById('boot');
   if (boot) boot.remove();
-  const m = await import('/js/eco/shell.js');
+  const m = await shellP;
   await m.start({ profile: prof, workspace: ws });
 }
 

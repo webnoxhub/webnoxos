@@ -125,7 +125,7 @@ export async function initSetPassword() {
   // The link carries a one-time token; the client turns it into a session.
   let session = null;
   if (sb) {
-    for (let i = 0; i < 10 && !session; i++) {
+    for (let i = 0; i < 20 && !session; i++) {
       try { const { data } = await sb.auth.getSession(); session = data && data.session; } catch { /* retry */ }
       if (!session) await sleep(300);
     }

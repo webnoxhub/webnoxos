@@ -8,7 +8,7 @@ export function getClient() {
     clientPromise = fetch('/api/config', { cache: 'no-store' })
       .then(r => r.json())
       .then(cfg => createClient(cfg.supabaseUrl, cfg.supabasePublishableKey, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' }
       }));
   }
   return clientPromise;

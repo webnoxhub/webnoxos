@@ -44,12 +44,12 @@ async function list(admin, ws, me, activeRoles, res) {
     .select('id,name,email,phone,joining_date,department,job_title,account_type,status,roles,reports_to,last_seen_at,avatar_url')
     .eq('workspace_id', ws.id).eq('is_master', false).order('created_at', { ascending: true });
   if (error) return send(res, 502, { error: error.message });
-  const people = [];
-  for (const p of data || []) {
+  // Look everyone up at the same time, not one after another
+  const people = await Promise.all((data || []).map(async (p) => {
     let pending = false;
     try { const u = await admin.auth.admin.getUserById(p.id); pending = !u.data?.user?.last_sign_in_at; } catch { /* ignore */ }
-    people.push({ ...p, pending, manageable: canManage(me.account_type, p.account_type, p.id === me.id) });
-  }
+    return { ...p, pending, manageable: canManage(me.account_type, p.account_type, p.id === me.id) };
+  }));
   const managers = people.filter((x) => x.status === 'active' && ['admin', 'manager'].includes(x.account_type))
     .map((x) => ({ id: x.id, name: x.name, department: x.department, account_type: x.account_type }));
   send(res, 200, { people, managers, roles: activeRoles, me: { id: me.id, account_type: me.account_type }, workspace: { name: ws.name, slug: ws.slug } });
