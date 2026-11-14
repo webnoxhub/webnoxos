@@ -6,9 +6,9 @@ const LOGIN = '/login.html';
 const NAV = [
   { path: '/master', label: 'Home', icon: 'home', page: () => import('/js/pages/master-home.js') },
   { path: '/master/workspaces', label: 'Workspaces', icon: 'building', page: () => import('/js/pages/master-workspaces.js') },
-  { path: '/master/finance', label: 'Finance', icon: 'wallet' },
-  { path: '/master/activity', label: 'Activity', icon: 'pulse' },
-  { path: '/master/settings', label: 'Settings', icon: 'cog' },
+  { path: '/master/finance', label: 'Finance', icon: 'wallet', page: () => import('/js/pages/master-finance.js') },
+  { path: '/master/activity', label: 'Activity', icon: 'pulse', page: () => import('/js/pages/master-activity.js') },
+  { path: '/master/settings', label: 'Settings', icon: 'cog', page: () => import('/js/pages/master-settings.js') },
 ];
 
 
@@ -54,8 +54,12 @@ async function memberWorld(sb, prof) {
   const cssP = loadCss('/css/eco.css');
   loadCss('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap').catch(() => {});
   shellP.catch(() => {}); cssP.catch(() => {});
-  const { data: ws } = await sb.from('workspaces').select('id,name,slug,status,logo_url,logo_only').eq('id', prof.workspace_id).maybeSingle();
-  if (!ws || ws.status === 'archived' || ws.status === 'suspended') return leave(sb, 'closed');
+  const { data: ws } = await sb.from('workspaces').select('id,name,slug,short_code,status,logo_url,logo_only').eq('id', prof.workspace_id).maybeSingle();
+  if (!ws || ws.status === 'archived') return leave(sb, 'closed');
+  // A workspace on hold for unpaid rent: the team is kept out, but its Admin signs in and
+  // lands on Billing, so a business can always see what it owes. No data is touched.
+  const held = ws.status === 'suspended';
+  if (held && prof.account_type !== 'admin') return leave(sb, 'closed');
   document.body.dataset.world = 'business';
   // The workspace app has its own look: swap the Webnox stylesheet for the workspace one.
   document.querySelectorAll('link[href="/css/app.css"]').forEach((l) => l.remove());
@@ -63,7 +67,7 @@ async function memberWorld(sb, prof) {
   const boot = document.getElementById('boot');
   if (boot) boot.remove();
   const m = await shellP;
-  await m.start({ profile: prof, workspace: ws });
+  await m.start({ profile: prof, workspace: ws, held });
 }
 
 // ---------------------------------------------------------------------------

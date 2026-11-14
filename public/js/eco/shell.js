@@ -9,7 +9,7 @@ import { refreshTimer, mountTimerPill } from './timer.js';
 import { esc, icon, avatar, fullName, closeDrawer, ROLE_ICONS, toast } from './ui.js';
 
 // Pages that exist so far. Each phase adds its pages here.
-const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients', 'projects', 'finance', 'permissions']);
+const READY = new Set(['admin-dashboard', 'member-home', 'team', 'tasks', 'my-tasks', 'tracking', 'logins', 'logs', 'my-activity', 'profile', 'settings', 'leads', 'clients', 'projects', 'finance', 'permissions', 'billing']);
 
 const ADMIN_NAV = [
   { route: 'dashboard', label: 'Dashboard', icon: 'dashboard', page: 'admin-dashboard' },
@@ -23,6 +23,7 @@ const ADMIN_NAV = [
   { route: 'tracking', label: 'Work tracking', icon: 'chart', page: 'tracking' },
   { route: 'logins', label: 'Login history', icon: 'login', page: 'logins' },
   { route: 'logs', label: 'Activity logs', icon: 'activity', page: 'logs' },
+  { route: 'billing', label: 'Billing', icon: 'wallet', page: 'billing', owner: true },
   { route: 'settings', label: 'Settings', icon: 'settings', page: 'settings', owner: true },
 ];
 // Extra items a manager (non-admin) gets for their own work
@@ -57,11 +58,13 @@ let signingOut = false;
 let cleanup = null;
 let routeSeq = 0;
 
-export async function start({ profile: boot, workspace }) {
+export async function start({ profile: boot, workspace, held = false }) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return location.replace('/login.html');
   state.user = session.user;
   state.workspace = workspace;
+  // A workspace on hold: the Admin signs in, but Billing is the only page there is.
+  state.held = !!held;
 
   const [profile, roles, settings, permRows, switches, projectOf] = await Promise.all([
     q(supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle()),
@@ -89,11 +92,13 @@ export async function start({ profile: boot, workspace }) {
   // A sign-in that happened a moment ago is a "login"; reopening the app later is a "resume".
   const fresh = Date.now() - Date.parse(session.user.last_sign_in_at || 0) < 90_000;
   renderShell();
-  // Tracking and the running timer sync in the background so the page does not wait on them
-  startTracking({ userId: profile.id, idleMinutes: state.settings.idle_minutes, via: fresh ? 'login' : 'resume' }).catch(() => {});
-  // Bill / salary reminders and last month's report notice: safe to repeat, each happens once
-  if (state.isAdmin || can('finance')) supabase.rpc('finance_sweep').then(() => {}, () => {});
-  refreshTimer().catch(() => {});
+  if (!state.held) {
+    // Tracking and the running timer sync in the background so the page does not wait on them
+    startTracking({ userId: profile.id, idleMinutes: state.settings.idle_minutes, via: fresh ? 'login' : 'resume' }).catch(() => {});
+    // Bill / salary reminders and last month's report notice: safe to repeat, each happens once
+    if (state.isAdmin || can('finance')) supabase.rpc('finance_sweep').then(() => {}, () => {});
+    refreshTimer().catch(() => {});
+  }
   window.addEventListener('hashchange', route);
   // Slim down the page header once the page is scrolled. The header keeps the same footprint in the
   // layout (the space it gives up becomes bottom margin), so nothing below it jumps and it cannot flicker.
@@ -123,8 +128,10 @@ export async function start({ profile: boot, workspace }) {
     location.replace('/login.html?m=inactive');
   });
   // keep the timer pill honest if the server paused it (e.g. after a long sleep)
-  setInterval(refreshTimer, 60_000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshTimer(); });
+  if (!state.held) {
+    setInterval(refreshTimer, 60_000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshTimer(); });
+  }
 }
 
 const loginUrl = () => '/login.html' + (state.workspace?.slug ? '?w=' + encodeURIComponent(state.workspace.slug) : '');
@@ -135,6 +142,7 @@ const roleLine = () => {
 };
 
 function navItems() {
+  if (state.held) return [{ route: 'billing', label: 'Billing', icon: 'wallet', page: 'billing' }];
   const keep = (n) => READY.has(n.page);
   if (!state.isAdmin) return memberNav().filter(keep);
   const items = ADMIN_NAV.filter((n) => (!n.owner || state.isOwner) && keep(n));
@@ -211,12 +219,12 @@ function renderShell() {
     pmenu.innerHTML = `
       <div class="pmenu-head">${avatar(p, 'lg')}<div style="min-width:0"><div class="name">${esc(fullName(p))}</div><div class="sub">${esc(p.email)}</div>
         <div class="sub">${esc(roleLine())}</div></div></div>
-      <a role="menuitem" href="#/profile">${icon('user', 16)}My profile</a>
-      ${state.isOwner && READY.has('settings') ? `<a role="menuitem" href="#/settings">${icon('settings', 16)}Settings</a>` : ''}
-      ${state.isOwner && READY.has('permissions') ? `<a role="menuitem" href="#/permissions">${icon('shield', 16)}Permissions</a>` : ''}
-      <a role="menuitem" href="#/profile">${icon('key', 16)}Change password</a>
-      ${state.isOwner ? `<button role="menuitem" data-logo>${icon('image', 16)}Workspace logo</button>` : ''}
-      ${state.isOwner ? '' : `<a role="menuitem" href="#/my-activity">${icon('activity', 16)}My activity</a>`}
+      ${state.held ? '' : `<a role="menuitem" href="#/profile">${icon('user', 16)}My profile</a>`}
+      ${!state.held && state.isOwner && READY.has('settings') ? `<a role="menuitem" href="#/settings">${icon('settings', 16)}Settings</a>` : ''}
+      ${!state.held && state.isOwner && READY.has('permissions') ? `<a role="menuitem" href="#/permissions">${icon('shield', 16)}Permissions</a>` : ''}
+      ${state.held ? '' : `<a role="menuitem" href="#/profile">${icon('key', 16)}Change password</a>`}
+      ${!state.held && state.isOwner ? `<button role="menuitem" data-logo>${icon('image', 16)}Workspace logo</button>` : ''}
+      ${state.held || state.isOwner ? '' : `<a role="menuitem" href="#/my-activity">${icon('activity', 16)}My activity</a>`}
       <div class="pmenu-sep"></div>
       <button role="menuitem" class="danger" data-signout>${icon('logout', 16)}Sign out</button>`;
     document.body.append(pmenu);
@@ -237,6 +245,7 @@ function renderShell() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pmenu) closeMenu(); });
 
   import('./notify.js').then((m) => m.mountBell(document.getElementById('bell-slot')));
+  if (state.held) return;
   mountTimerPill(document.getElementById('timer-slot'), async (taskId) => {
     const { openTaskDrawer } = await import('./task-drawer.js');
     openTaskDrawer(taskId);

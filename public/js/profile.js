@@ -14,7 +14,7 @@ export async function openProfile(sb, prof, wsName) {
   const roles = (d.roles || []).map((r) => ROLE_LABEL[r] || r).join(', ');
   m.body.innerHTML =
     '<div class="pf-head"><span class="avatar pf-av">' + esc(((d.name || d.email || '?').slice(0, 2)).toUpperCase()) + '</span>' +
-    '<div><p class="pf-name">' + esc(d.name || '') + '</p><p class="muted">' + esc(TYPE_LABEL[d.account_type] || 'Member') + (wsName ? ' of ' + esc(wsName) : '') + '</p></div></div>' +
+    '<div><p class="pf-name">' + esc(d.name || '') + '</p><p class="muted">' + esc(prof.is_master ? 'Master' : TYPE_LABEL[d.account_type] || 'Member') + (wsName ? ' of ' + esc(wsName) : '') + '</p></div></div>' +
     row('Email', d.email) + row('Phone', d.phone) + row('Department', d.department) + row('Designation', d.job_title) +
     row('Roles', roles) + row('Joined', d.joining_date);
 }

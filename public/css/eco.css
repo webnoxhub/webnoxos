@@ -1009,3 +1009,12 @@ input[type="date"] { cursor: pointer; }
 .app-foot { padding: 18px 24px 22px; text-align: center; font-size: 12px; color: var(--muted); }
 .logo-prev { display: grid; place-items: center; min-height: 96px; margin: 12px 0; border: 1px dashed var(--line-2); border-radius: 10px; color: var(--muted); background: var(--section); }
 .logo-prev img { max-width: 80%; max-height: 90px; }
+
+/* ---------- Billing: a notice that needs attention, and the invoice preview ---------- */
+.explain.warn { color: var(--ink); background: var(--warning-bg); border-radius: var(--r-lg); padding: 11px 14px; margin: 0 0 18px; }
+.explain.warn svg { color: var(--warning); }
+.table.plain td { border-bottom: 1px solid var(--line); }
+.table.plain tr:last-child td { border-bottom: 0; }
+.inv-preview { background: #fff; border-radius: 10px; max-height: 62vh; overflow: auto; -webkit-overflow-scrolling: touch; }
+.inv-preview .inv-doc { padding: 28px 30px; }
+@media (max-width: 767px) { .inv-preview { max-height: 56vh; } .inv-preview .inv-doc { padding: 18px 14px; } }

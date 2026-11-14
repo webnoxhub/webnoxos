@@ -465,3 +465,47 @@ body[data-world="master"] .wf-select option{ background:#0f2744; color:#fff; }
 
 .pf-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}.pf-av{width:48px;height:48px;cursor:default}.pf-name{margin:0;font-weight:700;font-size:17px}
 .pf-row{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}.pf-k{color:var(--muted)}.pf-v{word-break:break-word}
+
+/* ── Tabs (Master Finance) ─────────────────────────────────────── */
+.tabs{display:flex;gap:4px;margin-bottom:20px;overflow-x:auto;border-bottom:1px solid var(--line);padding-bottom:0}
+.tab{flex:none;height:38px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:transparent;
+  color:var(--muted);font-weight:500;cursor:pointer;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* Small count strip under the hero cards */
+.statline{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:16px}
+.stat{display:flex;flex-direction:column;gap:2px;padding:14px 16px;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius)}
+.stat-n{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat-l{font-size:12px;color:var(--muted)}
+
+/* 12-month bar strip */
+.bars{display:flex;align-items:flex-end;gap:6px;height:140px;padding-top:8px}
+.bar{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:6px}
+.bar-fill{display:block;width:100%;max-width:28px;border-radius:4px 4px 0 0;
+  background:linear-gradient(180deg,#22D3EE,#6D28D9)}
+.bar-l{font-size:10px;color:var(--muted)}
+
+.row-main .small{display:block}
+.row > span + span{white-space:nowrap}
+.pad-t{margin-top:16px}
+.range{max-width:360px;margin:0}
+.range .wf-group{margin-bottom:0}
+
+@media (max-width:1023px){ .statline{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:767px){
+  .tabs{margin-bottom:16px}
+  .bars{height:110px;gap:4px}
+  .range{max-width:none;width:100%}
+}
+@media print{
+  .sb,.top,.tabs,.toolbar,.app-foot,.scrim{display:none!important}
+  .shell{display:block} .view{padding:0;max-width:none}
+  .card,.hero-card{break-inside:avoid}
+}
+
+/* Invoice preview inside a modal */
+.inv-preview{background:#fff;border-radius:10px;max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch}
+.inv-preview .inv-doc{padding:28px 30px}
+.btn.danger{color:#FCA5A5}
+@media (max-width:767px){ .inv-preview{max-height:56vh} .inv-preview .inv-doc{padding:18px 14px} }
