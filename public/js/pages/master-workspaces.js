@@ -566,14 +566,18 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
       row('Type', TYPE_LABEL[ws.type] || ws.type) + row('Plan', planText) +
     '</div>' +
     '<h4 class="panel-h">Roles</h4>' + rolesTableHTML(roles) +
-    '<div class="panel-h-row"><h4 class="panel-h">Team</h4><button class="btn btn-sm btn-ghost" type="button" id="addPerson">' + icon('plus', 14) + ' Add Admin or Manager</button></div><div id="teamList">' +
+    '<div class="panel-h-row"><h4 class="panel-h">Workspace logins</h4><button class="btn btn-sm btn-ghost" type="button" id="addPerson">' + icon('plus', 14) + ' Add Admin or Manager</button></div><div id="teamList">' +
       (d.team.length ? d.team.map((p) =>
         '<div class="team-row" data-u="' + esc(p.id) + '">' +
           '<div class="team-main"><strong>' + esc(p.name || who[p.account_type]) + '</strong>' +
             '<span class="muted small">' + esc(who[p.account_type]) + (p.email ? ' · ' + esc(p.email) : '') + '</span></div>' +
           '<span class="chip chip-' + (p.status === 'inactive' ? 'muted' : p.pending ? 'warn' : 'ok') + '">' + (p.status === 'inactive' ? 'Inactive' : p.pending ? 'Invite pending' : 'Active') + '</span>' +
           (p.account_type !== 'member' ? '<button class="btn btn-sm btn-ghost" type="button" data-edit="' + esc(p.id) + '">Edit</button>' : '') +
-          '<button class="btn btn-sm btn-ghost" type="button" data-regen="' + esc(p.id) + '">Regenerate link</button>' +
+          (p.account_type === 'admin'
+            ? '<button class="btn btn-sm btn-ghost" type="button" data-reset="' + esc(p.id) + '"' +
+              (p.status !== 'active' || ['suspended', 'archived'].includes(ws.status) ? ' disabled' : '') +
+              '>Reset Admin password</button>'
+            : '<button class="btn btn-sm btn-ghost" type="button" data-regen="' + esc(p.id) + '">Regenerate link</button>') +
           '<button class="btn btn-sm btn-danger" type="button" data-del="' + esc(p.id) + '">Delete</button>' +
           '<div class="team-link" hidden></div>' +
         '</div>').join('') : '<p class="muted small">No people yet.</p>') +
@@ -583,6 +587,47 @@ async function openWorkspacePanel({ sb, id, onChanged }) {
 
   const err = body.querySelector('#panelErr');
   const showErr = (m) => { err.textContent = m; err.hidden = !m; };
+
+  body.querySelectorAll('[data-reset]').forEach((button) => button.addEventListener('click', () => {
+    const box = button.closest('.team-row').querySelector('.team-link');
+    const dialog = document.createElement('dialog');
+    dialog.className = 'modal';
+    dialog.setAttribute('aria-labelledby', 'resetAdminTitle');
+    dialog.innerHTML = '<form class="modal-body"><h3 id="resetAdminTitle">Reset Admin password</h3>' +
+      '<p>The Admin chooses their new password using the private reset link.</p>' +
+      '<label class="wf-label" for="resetAdminPassword">Current Master password</label>' +
+      '<input class="wf-input" id="resetAdminPassword" type="password" autocomplete="current-password" required>' +
+      '<p class="wf-err" role="alert"></p><div class="modal-foot">' +
+      '<button class="btn btn-ghost" type="button">Cancel</button>' +
+      '<button class="btn" type="submit">Generate reset link</button></div></form>';
+    overlay.appendChild(dialog);
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    dialog.querySelector('[type=button]').onclick = () => dialog.close();
+    dialog.querySelector('form').onsubmit = async (event) => {
+      event.preventDefault();
+      const input = dialog.querySelector('input');
+      const submit = dialog.querySelector('[type=submit]');
+      const error = dialog.querySelector('[role=alert]');
+      const payload = JSON.stringify({ user_id: button.dataset.reset, password: input.value });
+      input.value = '';
+      error.textContent = '';
+      submit.disabled = true;
+      try {
+        const result = await apiFetch(sb, '/api/master/workspace?id=' + encodeURIComponent(id) + '&action=link',
+          { method: 'POST', body: payload });
+        box.innerHTML = linkRow('Private reset link', result.link, 'Set your password for ' + ws.name + ': ');
+        box.hidden = false;
+        bindCopy(box);
+        dialog.close();
+      } catch (e) {
+        error.textContent = e.message;
+        input.focus();
+      } finally {
+        submit.disabled = false;
+      }
+    };
+    dialog.showModal();
+  }));
 
   body.querySelectorAll('[data-regen]').forEach((b) => b.addEventListener('click', async () => {
     const row_ = b.closest('.team-row'), box = row_.querySelector('.team-link');

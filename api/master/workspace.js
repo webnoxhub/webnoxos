@@ -5,7 +5,7 @@
 //   POST  /api/master/workspace?id=<uuid>&action=person  { name, email, account_type: 'admin'|'manager' }  add an Admin or Manager
 //   DELETE /api/master/workspace?id=<uuid>&action=person&user_id=<uuid>  { confirm: <typed name> }  permanent delete
 //   PATCH /api/master/workspace?id=<uuid>&action=person&user_id=<uuid>  { name?, email?, account_type?, status? }  edit one
-import { requireMaster, send } from '../../lib/master-guard.js';
+import { requireMaster, send, verifyMasterPassword } from '../../lib/master-guard.js';
 import { isEmail } from '../../lib/validate.js';
 import { makeLink, readJson, siteUrl } from '../../lib/invites.js';
 
@@ -13,7 +13,7 @@ const ROLES = ['sales_rep', 'lead_gen', 'cold_caller', 'finance', 'project_manag
 const STATUSES = ['setup', 'trial', 'active', 'suspended', 'archived'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const makeHandler = (masterGuard) => async function handler(req, res) {
+export const makeHandler = (masterGuard, verifyPassword = verifyMasterPassword) => async function handler(req, res) {
   const guard = await masterGuard(req);
   if (!guard.ok) return send(res, guard.status, { error: guard.error });
   const admin = guard.admin;
@@ -33,7 +33,7 @@ export const makeHandler = (masterGuard) => async function handler(req, res) {
   if (req.method === 'DELETE' && action === 'person') return deletePerson(admin, ws, url.searchParams.get('user_id') || '', req, res);
   if (req.method === 'PATCH') return update(admin, ws, req, res);
   if (req.method === 'DELETE') return purge(admin, ws, req, res);
-  if (req.method === 'POST' && action === 'link') return regenerate(admin, ws, req, res);
+  if (req.method === 'POST' && action === 'link') return regenerate(guard, ws, req, res, verifyPassword);
   if (req.method === 'POST' && action === 'person') return addPerson(admin, ws, req, res);
   send(res, 405, { error: 'Method not allowed' });
 };
@@ -99,13 +99,37 @@ async function update(admin, ws, req, res) {
   send(res, 200, { ok: true });
 }
 
-async function regenerate(admin, ws, req, res) {
+async function regenerate({ admin, user }, ws, req, res, verifyPassword) {
   let body; try { body = await readJson(req); } catch { return send(res, 400, { error: 'Invalid JSON body' }); }
-  if (!UUID.test(body.user_id || '')) return send(res, 400, { error: 'Invalid user' });
+  if (!UUID.test(body?.user_id || '')) return send(res, 400, { error: 'Invalid user' });
 
-  const { data: p } = await admin.from('profiles').select('id,email,workspace_id,is_master')
+  const { data: p } = await admin.from('profiles').select('id,email,workspace_id,is_master,account_type,status')
     .eq('id', body.user_id).maybeSingle();
   if (!p || p.workspace_id !== ws.id || p.is_master) return send(res, 404, { error: 'Person not found in this workspace' });
+
+  if (p.account_type === 'admin') {
+    if (['suspended', 'archived'].includes(ws.status) || p.status !== 'active') {
+      return send(res, 409, { error: 'The workspace and Admin must be available before resetting the password.' });
+    }
+    if (typeof body.password !== 'string' || !body.password || body.password.length > 1024) {
+      return send(res, 400, { error: 'Enter your current Master password.' });
+    }
+    if (!await verifyPassword(user, body.password)) {
+      return send(res, 403, { error: 'Master password could not be verified.' });
+    }
+    const identity = await admin.auth.admin.getUserById(p.id);
+    if (identity.error || !p.email || identity.data?.user?.email?.toLowerCase() !== p.email.toLowerCase()) {
+      return send(res, 409, { error: 'The Admin login could not be verified.' });
+    }
+    const reset = await admin.auth.admin.generateLink({
+      type: 'recovery', email: p.email, options: { redirectTo: `${siteUrl()}/set-password.html` },
+    });
+    const link = reset.data?.properties?.action_link;
+    if (reset.error || !link || reset.data?.user?.id !== p.id) {
+      return send(res, 502, { error: 'Unable to create a reset link. Try again.' });
+    }
+    return send(res, 200, { link });
+  }
 
   const r = await makeLink(admin, p.email);
   if (r.error) return send(res, 502, { error: r.error });

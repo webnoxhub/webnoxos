@@ -20,10 +20,12 @@ await db.exec(`
 `);
 await db.exec(fs.readFileSync(path.join(here, '..', 'supabase', 'schema.sql'), 'utf8'));
 const tokens = {}; const fake = makeFake(db, tokens);
-const api = makeWorkspace(makeGuard(() => fake));
-async function call(method, url, token, body) {
+const api = makeWorkspace(makeGuard(() => fake), async (user, password) =>
+  user.id === tokens.t_master && password === 'fixture-master-password');
+async function call(method, url, token, body, parsedBody = false) {
   const l = {};
   const req = { method, url, headers: token ? { authorization: 'Bearer ' + token } : {}, on: (e, f) => { l[e] = f; if (e === 'end') setTimeout(() => { if (l.data && body) l.data(JSON.stringify(body)); f(); }, 0); } };
+  if (parsedBody) req.body = body;
   let out; const res = { statusCode: 200, setHeader() {}, end(s) { out = { status: res.statusCode, json: s ? JSON.parse(s) : null }; } };
   await api(req, res); return out;
 }
@@ -38,6 +40,19 @@ await db.query(`update profiles set workspace_id=$1, account_type='admin' where 
 const master = await mk('boss@x.com', 'Boss'); await db.query(`select promote_to_master('boss@x.com')`);
 tokens.t_master = master; tokens.t_admin = adminA;
 const URL_ = (ws, extra = '') => `/api/master/workspace?id=${ws}&action=person${extra}`;
+
+const reset = (id, password, token = 't_master') => call(
+  'POST', `/api/master/workspace?id=${wsA}&action=link`, token, { user_id: id, password }, true);
+fake.auth.admin.getUserById = async (id) => ({
+  data: { user: (await db.query('select id,email from auth.users where id=$1', [id])).rows[0] },
+});
+ok('workspace Admin cannot issue a reset link', (await reset(adminA, 'fixture-master-password', 't_admin')).status === 403);
+ok('Master must supply their password', (await reset(adminA)).status === 400);
+ok('wrong Master password fails', (await reset(adminA, 'wrong')).status === 403);
+ok('reset cannot target an Admin in another workspace', (await reset(adminB, 'fixture-master-password')).status === 404);
+const resetResult = await reset(adminA, 'fixture-master-password');
+ok('verified Master can issue a reset for the selected Admin',
+  resetResult.status === 200 && resetResult.json.link === 'https://x.test/link/' + adminA);
 
 let x = await call('POST', URL_(wsA), 't_admin', { name: 'N', email: 'n@x.com', account_type: 'admin' });
 ok('a workspace Admin cannot use the Master route', x.status === 403);
