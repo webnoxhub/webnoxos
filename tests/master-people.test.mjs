@@ -50,9 +50,30 @@ ok('workspace Admin cannot issue a reset link', (await reset(adminA, 'fixture-ma
 ok('Master must supply their password', (await reset(adminA)).status === 400);
 ok('wrong Master password fails', (await reset(adminA, 'wrong')).status === 403);
 ok('reset cannot target an Admin in another workspace', (await reset(adminB, 'fixture-master-password')).status === 404);
-const resetResult = await reset(adminA, 'fixture-master-password');
+const generateLink = fake.auth.admin.generateLink;
+fake.auth.admin.generateLink = async (options) => {
+  const result = await generateLink(options);
+  result.data.properties.hashed_token = 'fixture-reset-hash';
+  result.data.properties.action_link = 'https://old.example/legacy-redirect';
+  return result;
+};
+const savedSite = process.env.SITE_URL;
+const savedVercelEnv = process.env.VERCEL_ENV;
+process.env.SITE_URL = 'https://old.example';
+process.env.VERCEL_ENV = 'production';
+let resetResult;
+try {
+  resetResult = await reset(adminA, 'fixture-master-password');
+} finally {
+  for (const [key, saved] of [['SITE_URL', savedSite], ['VERCEL_ENV', savedVercelEnv]]) {
+    if (saved === undefined) delete process.env[key];
+    else process.env[key] = saved;
+  }
+  fake.auth.admin.generateLink = generateLink;
+}
 ok('verified Master can issue a reset for the selected Admin',
-  resetResult.status === 200 && resetResult.json.link === 'https://x.test/link/' + adminA);
+  resetResult.status === 200 && resetResult.json.link ===
+    'https://webnoxos.vercel.app/set-password.html#token_hash=fixture-reset-hash&type=recovery');
 
 let x = await call('POST', URL_(wsA), 't_admin', { name: 'N', email: 'n@x.com', account_type: 'admin' });
 ok('a workspace Admin cannot use the Master route', x.status === 403);

@@ -119,12 +119,23 @@ export async function initSetPassword() {
     eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
   });
 
+  const link = new URLSearchParams(location.hash.slice(1));
+  const direct = link.has('token_hash');
+  const tokenHash = link.get('token_hash');
+  if (direct) history.replaceState(null, '', location.pathname);
   let sb;
-  try { sb = await getClient(); } catch { sb = null; }
+  try { sb = await getClient({ isolated: direct }); } catch { sb = null; }
 
-  // The link carries a one-time token; the client turns it into a session.
+  // Direct links redeem a one-time token; older links carry an Auth session.
   let session = null;
-  if (sb) {
+  if (sb && direct) {
+    try {
+      if (tokenHash && link.get('type') === 'recovery') {
+        const { data, error } = await sb.auth.verifyOtp({ token_hash: tokenHash, type: 'recovery' });
+        if (!error) session = data.session;
+      }
+    } catch { /* Show the expired-link message below. */ }
+  } else if (sb && link.has('access_token')) {
     for (let i = 0; i < 20 && !session; i++) {
       try { const { data } = await sb.auth.getSession(); session = data && data.session; } catch { /* retry */ }
       if (!session) await sleep(300);
@@ -145,8 +156,8 @@ export async function initSetPassword() {
       const { data: w } = await sb.from('workspaces').select('name,slug,logo_url,logo_only').eq('id', me.workspace_id).maybeSingle();
       if (w) {
         applyBrand(w.name, w.logo_url, w.logo_only);
-        document.getElementById('spTier').textContent = 'Welcome aboard';
-        document.getElementById('spSub').textContent = 'Create a password to get started.';
+        document.getElementById('spTier').textContent = direct ? 'Password reset' : 'Welcome aboard';
+        document.getElementById('spSub').textContent = direct ? 'Choose a new password.' : 'Create a password to get started.';
         document.title = 'Set your password · ' + w.name;
         slug = w.slug || '';
       }

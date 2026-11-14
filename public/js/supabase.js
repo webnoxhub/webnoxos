@@ -3,13 +3,17 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 let clientPromise;
 
-export function getClient() {
-  if (!clientPromise) {
-    clientPromise = fetch('/api/config', { cache: 'no-store' })
-      .then(r => r.json())
-      .then(cfg => createClient(cfg.supabaseUrl, cfg.supabasePublishableKey, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' }
-      }));
-  }
-  return clientPromise;
+export function getClient({ isolated = false } = {}) {
+  if (!isolated && clientPromise) return clientPromise;
+  const client = fetch('/api/config', { cache: 'no-store' })
+    .then(r => r.json())
+    .then(cfg => createClient(cfg.supabaseUrl, cfg.supabasePublishableKey, {
+      auth: {
+        persistSession: !isolated, autoRefreshToken: !isolated,
+        detectSessionInUrl: !isolated, flowType: 'implicit',
+        ...(isolated ? { storageKey: 'webnox-password-recovery' } : {}),
+      },
+    }));
+  if (!isolated) clientPromise = client;
+  return client;
 }

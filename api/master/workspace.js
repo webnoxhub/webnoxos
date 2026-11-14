@@ -121,14 +121,17 @@ async function regenerate({ admin, user }, ws, req, res, verifyPassword) {
     if (identity.error || !p.email || identity.data?.user?.email?.toLowerCase() !== p.email.toLowerCase()) {
       return send(res, 409, { error: 'The Admin login could not be verified.' });
     }
+    const origin = process.env.VERCEL_ENV === 'production' ? 'https://webnoxos.vercel.app' : siteUrl();
+    const url = new URL('/set-password.html', origin);
     const reset = await admin.auth.admin.generateLink({
-      type: 'recovery', email: p.email, options: { redirectTo: `${siteUrl()}/set-password.html` },
+      type: 'recovery', email: p.email, options: { redirectTo: url.href },
     });
-    const link = reset.data?.properties?.action_link;
-    if (reset.error || !link || reset.data?.user?.id !== p.id) {
+    const tokenHash = reset.data?.properties?.hashed_token;
+    if (reset.error || !tokenHash || reset.data?.user?.id !== p.id) {
       return send(res, 502, { error: 'Unable to create a reset link. Try again.' });
     }
-    return send(res, 200, { link });
+    url.hash = new URLSearchParams({ token_hash: tokenHash, type: 'recovery' }).toString();
+    return send(res, 200, { link: url.href });
   }
 
   const r = await makeLink(admin, p.email);
