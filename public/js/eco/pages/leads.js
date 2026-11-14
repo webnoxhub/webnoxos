@@ -21,12 +21,15 @@ function waLink(phone, country) {
 }
 export const canAssignLeads = () => state.isAdmin || state.myRoles.includes('sales_rep');
 export function agentLabel(l, dir) { return dirName(dir, l.agent_id) || l.agent_name || dirName(dir, l.created_by) || ''; }
+// In-app uploads have an authenticated creator. Public forms identify the agent separately.
+const uploaderId = (lead) => lead.created_by || lead.agent_id;
 
 export async function render({ el, params }) {
   let leads = []; let dir = [];
   let status = params.get('status') || 'all';
   let scope = params.get('scope') || 'all';
   let search = '';
+  const uploaders = new Set();
   const canEdit = can('leads', 'edit');
   const canAssign = canAssignLeads();
 
@@ -39,7 +42,14 @@ export async function render({ el, params }) {
       </div>
     </div>
     <div id="unassigned-note"></div>
-    <div class="toolbar"><div class="seg" role="group" aria-label="Stage" id="status"></div></div>
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Stage" id="status"></div>
+      <details style="position:relative;margin-inline-start:auto">
+        <summary class="btn" style="cursor:pointer">Team members <span id="uploader-count"></span></summary>
+        <div class="panel" id="uploaders" role="group" aria-label="Filter by lead uploader"
+          style="position:absolute;z-index:5;inset-inline-end:0;min-width:190px;width:max-content;max-width:min(260px,80vw);max-height:260px;overflow:auto;padding:12px;margin-top:4px"></div>
+      </details>
+    </div>
     <div class="toolbar">
       <div class="search grow">${icon('search', 15)}<input class="input" id="q" placeholder="Search name, company, email, phone" aria-label="Search leads"></div>
       <select class="select" id="scope" style="width:auto" aria-label="Whose leads">
@@ -48,6 +58,8 @@ export async function render({ el, params }) {
     </div>
     <section class="panel"><div class="table-wrap" id="table">${loadingBlock(5)}</div></section>`;
   const table = el.querySelector('#table');
+  const uploaderOptions = el.querySelector('#uploaders');
+  const uploaderCount = el.querySelector('#uploader-count');
   el.querySelector('#scope').value = scope;
 
   const groups = {
@@ -59,14 +71,17 @@ export async function render({ el, params }) {
   const labels = [['all', 'All'], ['open', 'Open'], ...OPEN.map((k) => [k, STAGES[k]]), ['won', 'Won'], ['converted', 'Converted to client'], ['lost', 'Lost']];
 
   function draw() {
-    const waiting = leads.filter((l) => !l.assigned_to && !l.client_id && OPEN.includes(l.status)).length;
+    const filteredByUploader = uploaders.size
+      ? leads.filter((lead) => uploaders.has(uploaderId(lead)))
+      : leads;
+    const waiting = filteredByUploader.filter((l) => !l.assigned_to && !l.client_id && OPEN.includes(l.status)).length;
     el.querySelector('#unassigned-note').innerHTML = canAssign && waiting && scope !== 'unassigned'
       ? `<div class="note warn" style="margin-bottom:14px">${icon('target', 14)} <b>${waiting}</b> ${waiting === 1 ? 'lead is' : 'leads are'} waiting for a sales rep. <button class="linkish" data-show-unassigned>Show them</button></div>` : '';
     el.querySelector('#status').innerHTML = labels.map(([k, v]) =>
-      `<button data-s="${k}" aria-pressed="${status === k}">${v}<span class="count">${leads.filter(groups[k]).length}</span></button>`).join('');
+      `<button data-s="${k}" aria-pressed="${status === k}">${v}<span class="count">${filteredByUploader.filter(groups[k]).length}</span></button>`).join('');
     const s = search.toLowerCase();
     const me = state.profile.id;
-    const list = leads.filter((l) => groups[status](l)
+    const list = filteredByUploader.filter((l) => groups[status](l)
       && (scope === 'all' || (scope === 'mine' ? (l.created_by === me || l.agent_id === me) : scope === 'unassigned' ? (!l.assigned_to && !l.client_id && OPEN.includes(l.status)) : l.assigned_to === me))
       && (!s || `${l.contact_name || ''} ${l.company} ${l.email || ''} ${l.phone || ''}`.toLowerCase().includes(s)));
     if (!leads.length) {
@@ -76,9 +91,11 @@ export async function render({ el, params }) {
     if (!list.length) { table.innerHTML = emptyState('No leads match these filters'); return; }
     const reps = dir.filter((d) => d.roles.includes('sales_rep') && d.status !== 'inactive');
     table.innerHTML = `<table class="table caps">
-      <thead><tr><th>Lead / company</th><th>Service</th><th>Pipeline status</th><th>Assigned to</th><th>Budget</th><th>Contact &amp; outreach</th><th>Next follow-up</th><th class="r">Actions</th></tr></thead>
+      <thead><tr><th>Lead / company</th><th>Service</th><th>Pipeline status</th><th>Assigned to</th><th>Agent</th><th>Contact &amp; outreach</th><th>Next follow-up</th><th class="r">Actions</th></tr></thead>
       <tbody>${list.map((l) => {
         const rep = dirName(dir, l.assigned_to);
+        const uploader = dirName(dir, uploaderId(l)) || (!l.created_by && l.agent_name)
+          || (uploaderId(l) ? 'Former member' : 'Public form');
         const wa = waLink(l.phone, l.country);
         const fu = l.next_follow_up;
         return `<tr class="${l.status === 'won' ? 'won' : ''}" data-id="${l.id}">
@@ -91,7 +108,7 @@ export async function render({ el, params }) {
         <td>${canAssign && !l.client_id
           ? `<select class="assign-select ${l.assigned_to ? 'set' : ''}" data-assign-for="${l.id}" aria-label="Sales representative for ${esc(l.company)}"><option value="">Unassigned</option>${reps.map((r) => `<option value="${r.id}" ${l.assigned_to === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}${l.assigned_to && !reps.some((r) => r.id === l.assigned_to) ? `<option value="${l.assigned_to}" selected>${esc(rep || 'Former member')}</option>` : ''}</select>`
           : rep ? `<div class="row" style="gap:8px"><span class="mini-av">${initial(rep)}</span><span>${esc(rep)}</span></div>` : '<span class="muted small">Unassigned</span>'}</td>
-        <td>${l.budget !== null && l.budget !== undefined ? `<div style="font-weight:600" class="money">${esc(fmtBudget(l.budget, l.currency))}</div>` : '<div class="muted">—</div>'}<div class="small muted">${l.source ? `via ${esc(l.source)}` : ''}</div></td>
+        <td><div>${esc(uploader)}</div>${l.source ? `<div class="small muted">via ${esc(l.source)}</div>` : ''}</td>
         <td><div class="outreach">
           ${l.phone ? `<a href="tel:${esc(l.phone)}" title="Call ${esc(l.phone)}" aria-label="Call">${icon('phone', 15)}</a>` : `<span title="No phone">${icon('phone', 15)}</span>`}
           ${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp">${icon('chat', 15)}</a>` : `<span title="No phone">${icon('chat', 15)}</span>`}
@@ -107,9 +124,31 @@ export async function render({ el, params }) {
       q(supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(3000)),
       loadDirectory(),
     ]);
+    const members = [...dir].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const memberIds = new Set(members.map((member) => member.id));
+    for (const id of uploaders) if (!memberIds.has(id)) uploaders.delete(id);
+    uploaderOptions.innerHTML = '<label class="row"><input type="checkbox" value=""> All</label>' +
+      members.map((member) => `<label class="row" style="margin-top:8px"><input type="checkbox"
+        value="${esc(member.id)}"> ${esc(member.name || 'Team member')}</label>`).join('');
+    syncUploaders();
     draw();
   }
 
+  function syncUploaders() {
+    uploaderCount.textContent = uploaders.size ? `(${uploaders.size})` : '';
+    for (const option of uploaderOptions.querySelectorAll('input')) {
+      option.checked = option.value ? uploaders.has(option.value) : uploaders.size === 0;
+    }
+  }
+  uploaderOptions.addEventListener('change', (event) => {
+    const option = event.target;
+    if (!option.matches('input[type="checkbox"]')) return;
+    if (!option.value) uploaders.clear();
+    else if (option.checked) uploaders.add(option.value);
+    else uploaders.delete(option.value);
+    syncUploaders();
+    draw();
+  });
   el.querySelector('#status').addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (b) { status = b.dataset.s; draw(); } });
   el.querySelector('#q').addEventListener('input', (e) => { search = e.target.value.trim(); draw(); });
   el.querySelector('#scope').addEventListener('change', (e) => { scope = e.target.value; draw(); });
@@ -225,7 +264,7 @@ export async function openLeadDrawer(id) {
     drawer.querySelector('.drawer-body').innerHTML = `
       ${banner}
       <div class="row wrap">${leadBadge(lead.status)}<span class="prio-pill ${esc(lead.priority)}" style="margin:0">${esc(PRIORITIES[lead.priority])} priority</span>
-        ${lead.budget !== null && lead.budget !== undefined ? `<span class="chip">${esc(fmtBudget(lead.budget, lead.currency))}</span>` : ''}</div>
+        ${lead.budget !== null && lead.budget !== undefined ? `<span class="chip">Budget: ${esc(fmtBudget(lead.budget, lead.currency))}</span>` : ''}</div>
       <div class="outreach">
         ${lead.phone ? `<a href="tel:${esc(lead.phone)}" aria-label="Call">${icon('phone', 15)}</a>` : ''}
         ${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener" aria-label="WhatsApp">${icon('chat', 15)}</a>` : ''}
