@@ -36,11 +36,17 @@ export async function render({ el, params }) {
   el.innerHTML = `
     <style>
       html:has(#lead-filters) { scrollbar-gutter: stable; }
-      #lead-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
-      #lead-filters .count { display: inline-block; min-width: 4ch; text-align: end; font-variant-numeric: tabular-nums; }
+      #lead-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+      #lead-filters .seg { flex-wrap: wrap; overflow: visible; }
+      #lead-filters .seg button { padding-inline: 8px; }
+      #lead-filters .count { display: inline-block; min-width: 2ch; font-variant-numeric: tabular-nums; }
       #lead-filters summary::-webkit-details-marker { display: none; }
       #team-filter[open] > summary, #team-filter[data-active] > summary { color: var(--accent); border-color: var(--accent); }
-      #unassigned-count { visibility: hidden; flex: none; inline-size: 16ch; justify-content: center; }
+      #unassigned-count {
+        visibility: hidden; flex: none; inline-size: 16ch; justify-content: center;
+        background: var(--warning-bg); border: 1px solid #FDE68A; color: #92400E;
+      }
+      #unassigned-count:hover { background: #FEF3C7; border-color: #FCD34D; }
       #unassigned-count[data-visible] { visibility: visible; }
     </style>
     <div class="page-head">
