@@ -34,6 +34,15 @@ export async function render({ el, params }) {
   const canAssign = canAssignLeads();
 
   el.innerHTML = `
+    <style>
+      html:has(#lead-filters) { scrollbar-gutter: stable; }
+      #lead-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+      #lead-filters .count { display: inline-block; min-width: 4ch; text-align: end; font-variant-numeric: tabular-nums; }
+      #lead-filters summary::-webkit-details-marker { display: none; }
+      #team-filter[open] > summary, #team-filter[data-active] > summary { color: var(--accent); border-color: var(--accent); }
+      #unassigned-count { visibility: hidden; flex: none; inline-size: 16ch; justify-content: center; }
+      #unassigned-count[data-visible] { visibility: visible; }
+    </style>
     <div class="page-head">
       <div><h1>Leads</h1><p>Every prospect from first contact to a converted client.</p></div>
       <div class="actions">
@@ -41,11 +50,10 @@ export async function render({ el, params }) {
         ${canEdit ? `<button class="btn" id="import">${icon('upload', 15)}Import CSV</button><button class="btn btn-primary" id="new">${icon('plus', 15)}New lead</button>` : ''}
       </div>
     </div>
-    <div id="unassigned-note"></div>
-    <div class="toolbar">
+    <div class="toolbar" id="lead-filters">
       <div class="seg" role="group" aria-label="Stage" id="status"></div>
-      <details style="position:relative;margin-inline-start:auto">
-        <summary class="btn" style="cursor:pointer">Team members <span id="uploader-count"></span></summary>
+      <details id="team-filter" style="position:relative">
+        <summary class="btn" style="cursor:pointer">${icon('users', 15)} Team</summary>
         <div class="panel" id="uploaders" role="group" aria-label="Filter by lead uploader"
           style="position:absolute;z-index:5;inset-inline-end:0;min-width:190px;width:max-content;max-width:min(260px,80vw);max-height:260px;overflow:auto;padding:12px;margin-top:4px"></div>
       </details>
@@ -55,11 +63,13 @@ export async function render({ el, params }) {
       <select class="select" id="scope" style="width:auto" aria-label="Whose leads">
         <option value="all">All leads</option><option value="mine">My leads (agent / added by me)</option><option value="assigned">Assigned to me</option><option value="unassigned">Not assigned yet</option>
       </select>
+      ${canAssign ? '<button class="btn btn-sm btn-ghost" type="button" id="unassigned-count" aria-label="Show unassigned leads"></button>' : ''}
     </div>
     <section class="panel"><div class="table-wrap" id="table">${loadingBlock(5)}</div></section>`;
   const table = el.querySelector('#table');
   const uploaderOptions = el.querySelector('#uploaders');
-  const uploaderCount = el.querySelector('#uploader-count');
+  const teamFilter = el.querySelector('#team-filter');
+  const unassignedCount = el.querySelector('#unassigned-count');
   el.querySelector('#scope').value = scope;
 
   const groups = {
@@ -75,8 +85,10 @@ export async function render({ el, params }) {
       ? leads.filter((lead) => uploaders.has(uploaderId(lead)))
       : leads;
     const waiting = filteredByUploader.filter((l) => !l.assigned_to && !l.client_id && OPEN.includes(l.status)).length;
-    el.querySelector('#unassigned-note').innerHTML = canAssign && waiting && scope !== 'unassigned'
-      ? `<div class="note warn" style="margin-bottom:14px">${icon('target', 14)} <b>${waiting}</b> ${waiting === 1 ? 'lead is' : 'leads are'} waiting for a sales rep. <button class="linkish" data-show-unassigned>Show them</button></div>` : '';
+    if (unassignedCount) {
+      unassignedCount.textContent = `${waiting} unassigned`;
+      unassignedCount.toggleAttribute('data-visible', waiting > 0 && scope !== 'unassigned');
+    }
     el.querySelector('#status').innerHTML = labels.map(([k, v]) =>
       `<button data-s="${k}" aria-pressed="${status === k}">${v}<span class="count">${filteredByUploader.filter(groups[k]).length}</span></button>`).join('');
     const s = search.toLowerCase();
@@ -135,7 +147,7 @@ export async function render({ el, params }) {
   }
 
   function syncUploaders() {
-    uploaderCount.textContent = uploaders.size ? `(${uploaders.size})` : '';
+    teamFilter.toggleAttribute('data-active', uploaders.size > 0);
     for (const option of uploaderOptions.querySelectorAll('input')) {
       option.checked = option.value ? uploaders.has(option.value) : uploaders.size === 0;
     }
@@ -152,7 +164,12 @@ export async function render({ el, params }) {
   el.querySelector('#status').addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (b) { status = b.dataset.s; draw(); } });
   el.querySelector('#q').addEventListener('input', (e) => { search = e.target.value.trim(); draw(); });
   el.querySelector('#scope').addEventListener('change', (e) => { scope = e.target.value; draw(); });
-  el.querySelector('#unassigned-note').addEventListener('click', (e) => { if (e.target.closest('[data-show-unassigned]')) { scope = 'unassigned'; el.querySelector('#scope').value = scope; draw(); } });
+  unassignedCount?.addEventListener('click', () => {
+    status = 'all';
+    scope = 'unassigned';
+    el.querySelector('#scope').value = scope;
+    draw();
+  });
   el.querySelector('#new')?.addEventListener('click', () => openLeadForm());
   el.querySelector('#import')?.addEventListener('click', () => openImport());
   el.querySelector('#share').addEventListener('click', () => shareForm());
