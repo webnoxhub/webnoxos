@@ -126,7 +126,7 @@ export async function render({ el, params }) {
         <td>${canAssign && !l.client_id
           ? `<select class="assign-select ${l.assigned_to ? 'set' : ''}" data-assign-for="${l.id}" aria-label="Sales representative for ${esc(l.company)}"><option value="">Unassigned</option>${reps.map((r) => `<option value="${r.id}" ${l.assigned_to === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}${l.assigned_to && !reps.some((r) => r.id === l.assigned_to) ? `<option value="${l.assigned_to}" selected>${esc(rep || 'Former member')}</option>` : ''}</select>`
           : rep ? `<div class="row" style="gap:8px"><span class="mini-av">${initial(rep)}</span><span>${esc(rep)}</span></div>` : '<span class="muted small">Unassigned</span>'}</td>
-        <td><div>${esc(uploader)}</div>${l.source ? `<div class="small muted">via ${esc(l.source)}</div>` : ''}</td>
+        <td><div>${esc(uploader)}</div>${l.source ? `<div class="muted" style="font-size:11px;white-space:nowrap">(via ${esc(l.source)})</div>` : ''}</td>
         <td><div class="outreach">
           ${l.phone ? `<a href="tel:${esc(l.phone)}" title="Call ${esc(l.phone)}" aria-label="Call">${icon('phone', 15)}</a>` : `<span title="No phone">${icon('phone', 15)}</span>`}
           ${wa ? `<a class="wa" href="${wa}" target="_blank" rel="noopener" title="WhatsApp" aria-label="WhatsApp">${icon('chat', 15)}</a>` : `<span title="No phone">${icon('chat', 15)}</span>`}
